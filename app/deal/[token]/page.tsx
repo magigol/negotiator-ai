@@ -1,427 +1,389 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { useParams } from "next/navigation";
 
-type Role = "seller" | "buyer" | "mediator";
-
-type Product = {
-  title: string | null;
-  description: string | null;
-  price: number | null;
-  imageUrl: string | null;
+type DealRow = {
+  id: string;
+  status: string | null;
+  created_at: string;
+  product_title: string | null;
+  product_description: string | null;
+  product_price_public: number | null;
+  product_image_url: string | null;
 };
 
-export default function DealPage() {
-  const params = useParams<{ token: string }>();
-  const token = params?.token;
+type TermsRow = {
+  deal_id: string;
+
+  seller_initial: number | null;
+  seller_min: number | null;
+  seller_min_current: number | null;
+  seller_urgency: string | null;
+
+  buyer_max: number | null;
+  buyer_initial_offer: number | null;
+  buyer_urgency: string | null;
+
+  updated_at: string | null;
+};
+
+// ⚠️ Ajusta campos si tu tabla offers es distinta
+type OfferRow = {
+  id: string;
+  deal_id: string;
+  created_at: string;
+  // típicos:
+  side?: "buyer" | "seller" | "ai";
+  amount?: number;
+  summary?: string | null;
+};
+
+// ⚠️ Ajusta campos si tu tabla messages es distinta
+type MessageRow = {
+  id: string;
+  deal_id: string;
+  created_at: string;
+  role?: "buyer" | "seller" | "ai";
+  content?: string;
+};
+
+export default function SellerDealPage({ params }: { params: { token: string } }) {
+  const router = useRouter();
+  const token = params.token;
+
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
 
   const [dealId, setDealId] = useState<string | null>(null);
-  const [role, setRole] = useState<Role | null>(null);
+  const [deal, setDeal] = useState<DealRow | null>(null);
+  const [terms, setTerms] = useState<TermsRow | null>(null);
 
-  const [dealStatus, setDealStatus] = useState<string>("active");
-  const [product, setProduct] = useState<Product | null>(null);
+  const [buyerToken, setBuyerToken] = useState<string | null>(null);
 
-  const [messages, setMessages] = useState<any[]>([]);
-  const [latestOffer, setLatestOffer] = useState<any | null>(null);
+  const [offers, setOffers] = useState<OfferRow[]>([]);
+  const [messages, setMessages] = useState<MessageRow[]>([]);
 
-  const [text, setText] = useState("");
-  const [newMin, setNewMin] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const origin = useMemo(() => (typeof window !== "undefined" ? window.location.origin : ""), []);
 
-  const listRef = useRef<HTMLDivElement | null>(null);
-
-  const buyerMessages = useMemo(
-    () => messages.filter((m) => m.sender_role === "buyer"),
-    [messages]
-  );
-
-  const lastBuyerMsg = useMemo(
-    () => buyerMessages[buyerMessages.length - 1]?.content ?? null,
-    [buyerMessages]
-  );
-
-  const lastMediatorMsg = useMemo(
-    () =>
-      messages
-        .filter((m) => m.sender_role === "mediator")
-        .slice(-1)[0]?.content ?? null,
-    [messages]
-  );
-
-  const startedAt = useMemo(() => {
-    const first = messages[0]?.created_at;
-    return first ? new Date(first).toLocaleString() : null;
-  }, [messages]);
-
-  const buyerInputDisabled =
-    role !== "buyer" || dealStatus !== "active" || busy;
-
-  useEffect(() => {
-    if (role !== "buyer") return;
-    const el = listRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages.length, role]);
-
-  async function loadDeal(id: string) {
-    const { data } = await supabase
+  async function loadAll(dId: string) {
+    // deal
+    const { data: dealRow, error: dealErr } = await supabase
       .from("deals")
-      .select("status, product_title, product_description, product_price_public, product_image_url")
-      .eq("id", id)
+      .select("id,status,created_at,product_title,product_description,product_price_public,product_image_url")
+      .eq("id", dId)
       .single();
 
-    if (data) {
-      setDealStatus(data.status);
-      setProduct({
-        title: data.product_title ?? null,
-        description: data.product_description ?? null,
-        price: data.product_price_public ?? null,
-        imageUrl: data.product_image_url ?? null,
-      });
-    }
-  }
+    if (dealErr) throw dealErr;
+    setDeal(dealRow as DealRow);
 
-  async function loadMessages(id: string) {
-    const { data } = await supabase
-      .from("messages")
-      .select("*")
-      .eq("deal_id", id)
-      .order("created_at", { ascending: true });
+    // terms
+    const { data: termsRow, error: termsErr } = await supabase
+      .from("deal_terms")
+      .select("deal_id,seller_initial,seller_min,seller_min_current,seller_urgency,buyer_max,buyer_initial_offer,buyer_urgency,updated_at")
+      .eq("deal_id", dId)
+      .maybeSingle();
 
-    setMessages(data ?? []);
-  }
+    if (termsErr) throw termsErr;
+    setTerms((termsRow ?? null) as TermsRow | null);
 
-  async function loadLatestOffer(id: string) {
-    const { data } = await supabase
+    // buyer token (para mostrar link al vendedor)
+    const { data: buyerPart, error: buyerErr } = await supabase
+      .from("deal_participants")
+      .select("token")
+      .eq("deal_id", dId)
+      .eq("role", "buyer")
+      .maybeSingle();
+
+    if (buyerErr) throw buyerErr;
+    setBuyerToken((buyerPart?.token as string) ?? null);
+
+    // offers (opcional)
+    const { data: offersRows } = await supabase
       .from("offers")
       .select("*")
-      .eq("deal_id", id)
+      .eq("deal_id", dId)
       .order("created_at", { ascending: false })
-      .limit(1);
+      .limit(50);
 
-    setLatestOffer(data?.[0] ?? null);
+    setOffers((offersRows ?? []) as OfferRow[]);
+
+    // messages (opcional)
+    const { data: msgRows } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("deal_id", dId)
+      .order("created_at", { ascending: true })
+      .limit(200);
+
+    setMessages((msgRows ?? []) as MessageRow[]);
   }
 
   useEffect(() => {
-    if (!token) return;
-
     (async () => {
-      const { data, error } = await supabase
+      setErrMsg(null);
+      setLoading(true);
+
+      // 1) Validar token seller
+      const { data: part, error: partErr } = await supabase
         .from("deal_participants")
         .select("deal_id, role")
         .eq("token", token)
-        .single();
+        .maybeSingle();
 
-      if (error || !data) {
-        setErr("Token inválido.");
+      if (partErr) {
+        setErrMsg(partErr.message);
+        setLoading(false);
         return;
       }
 
-      setDealId(data.deal_id);
-      setRole(data.role);
+      if (!part || part.role !== "seller") {
+        setErrMsg("Link inválido (token no encontrado o no es de vendedor).");
+        setLoading(false);
+        return;
+      }
 
-      await loadDeal(data.deal_id);
-      await loadMessages(data.deal_id);
-      await loadLatestOffer(data.deal_id);
+      const dId = part.deal_id as string;
+      setDealId(dId);
+
+      try {
+        await loadAll(dId);
+      } catch (e: any) {
+        setErrMsg(e?.message ?? "Error cargando deal");
+      }
+
+      setLoading(false);
     })();
   }, [token]);
 
-  useEffect(() => {
-    if (!dealId) return;
-
-    const channel = supabase
-      .channel(`deal:${dealId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `deal_id=eq.${dealId}`,
-        },
-        async (payload) => {
-          setMessages((prev) => [...prev, payload.new]);
-
-          if (payload.new.sender_role === "mediator") {
-            await loadDeal(dealId);
-            await loadLatestOffer(dealId);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [dealId]);
-
-  async function buyerSend() {
-    if (!dealId || role !== "buyer") return;
-
-    const content = text.trim();
-    if (!content) return;
-
-    setText("");
-    setBusy(true);
-    setErr(null);
-
+  async function copy(text: string) {
     try {
-      const { error: insErr } = await supabase.from("messages").insert({
-        deal_id: dealId,
-        sender_role: "buyer",
-        content,
-      });
-      if (insErr) throw new Error(insErr.message);
-
-      const r = await fetch("/api/propose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dealId }),
-      });
-
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.error ?? "Error en /api/propose");
-
-      await loadDeal(dealId);
-      await loadLatestOffer(dealId);
-    } catch (e: any) {
-      setErr(e?.message ?? "Error");
-    } finally {
-      setBusy(false);
-    }
+      await navigator.clipboard.writeText(text);
+    } catch {}
   }
 
-  async function sellerRespond(action: "accept" | "reject") {
-    if (!dealId || role !== "seller" || !latestOffer) return;
-
+  async function setStatus(status: "accepted" | "rejected" | "active" | "pending_seller") {
+    if (!dealId) return;
     setBusy(true);
-    setErr(null);
+    setErrMsg(null);
+
+    const { error } = await supabase.from("deals").update({ status }).eq("id", dealId);
+    if (error) setErrMsg(error.message);
 
     try {
-      const r = await fetch("/api/offers/respond", {
+      await loadAll(dealId);
+    } catch {}
+    setBusy(false);
+  }
+
+  async function requestAIProposal() {
+    if (!dealId) return;
+    setBusy(true);
+    setErrMsg(null);
+
+    try {
+      const res = await fetch("/api/propose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           dealId,
-          offerId: latestOffer.id,
-          actorRole: "seller",
-          action,
+          sellerToken: token, // por si quieres validar server-side
         }),
       });
 
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.error ?? "Error respondiendo oferta");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json?.error ?? `Error /api/propose (${res.status})`);
+      }
 
-      await loadDeal(dealId);
-      await loadLatestOffer(dealId);
+      // Si tu API devuelve algo tipo {offer, summary}, aquí podrías mostrarlo.
+      // Para MVP, solo recargamos.
+      await loadAll(dealId);
     } catch (e: any) {
-      setErr(e?.message ?? "Error");
+      setErrMsg(e?.message ?? "No se pudo generar propuesta IA.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function updateMin() {
-    if (!dealId || role !== "seller" || !newMin.trim()) return;
+  if (loading) return <main className="container">Cargando…</main>;
 
-    setBusy(true);
-    setErr(null);
-
-    try {
-      const r = await fetch("/api/seller/update-min", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dealId, newMin: Number(newMin) }),
-      });
-
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.error ?? "Error actualizando mínimo");
-
-      await loadDeal(dealId);
-      setNewMin("");
-    } catch (e: any) {
-      setErr(e?.message ?? "Error");
-    } finally {
-      setBusy(false);
-    }
+  if (!deal) {
+    return (
+      <main className="container">
+        <h1 className="h1">Deal (vendedor)</h1>
+        <div className="muted">{errMsg ?? "No encontrado"}</div>
+      </main>
+    );
   }
 
-  if (!role || !dealId) return <main className="container">Cargando…</main>;
-  if (err) return <main className="container"><div className="alert">{err}</div></main>;
+  const buyerLink = buyerToken ? `${origin}/join/${buyerToken}` : null;
 
   return (
     <main className="container">
       <div className="header">
         <div>
-          <h1 className="h1">Negotiator AI</h1>
-          <div className="sub">
-            Rol: <b>{role}</b> · Estado: <b>{dealStatus}</b>
-          </div>
+          <h1 className="h1">Deal (vendedor)</h1>
+          <div className="sub">Control y negociación del trato</div>
         </div>
-        <span className="badge">Deal</span>
+        <div className="btnRow">
+          <a className="btnGhost" href="/dashboard">Dashboard</a>
+          <button className="btnGhost" onClick={() => router.push("/create")}>Crear</button>
+        </div>
       </div>
 
-      {product && (
-        <div className="card">
-          <div className="productCard">
-            {product.imageUrl ? (
-              <img
-                className="productImg"
-                src={product.imageUrl}
-                alt={product.title ?? "Producto"}
-                onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-              />
-            ) : (
-              <div className="productImg" />
-            )}
-
-            <div>
-              <p className="productTitle">{product.title ?? "Producto"}</p>
-              {product.price != null && <div className="productPrice">${product.price}</div>}
-              {product.description && <div className="muted" style={{ marginTop: 8 }}>{product.description}</div>}
-            </div>
-          </div>
+      {errMsg && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid rgba(255,80,80,.35)",
+            background: "rgba(255,80,80,.08)",
+          }}
+        >
+          {errMsg}
         </div>
       )}
 
-      <div className="grid grid-2" style={{ marginTop: 12 }}>
-        {/* BUYER */}
-        {role === "buyer" && (
-          <>
-            <section className="card">
-              <h3 className="cardTitle">Chat</h3>
+      <div className="grid2" style={{ marginTop: 12 }}>
+        {/* Producto */}
+        <div className="card">
+          <div style={{ fontWeight: 900, marginBottom: 10 }}>Producto</div>
 
-              <div ref={listRef} className="chatBox">
-                {messages.map((m) => (
-                  <div key={m.id} className="msg">
-                    <b>{m.sender_role}:</b> {m.content}
-                  </div>
-                ))}
+          {deal.product_image_url ? (
+            <img
+              src={deal.product_image_url}
+              alt="img"
+              style={{ width: 260, height: 260, objectFit: "cover", borderRadius: 18, marginBottom: 12 }}
+            />
+          ) : (
+            <div style={{ width: 260, height: 260, borderRadius: 18, background: "rgba(255,255,255,.06)", marginBottom: 12 }} />
+          )}
+
+          <div style={{ fontWeight: 800, fontSize: 18 }}>{deal.product_title ?? "(sin título)"}</div>
+          <div className="small muted" style={{ marginTop: 6 }}>
+            {new Date(deal.created_at).toLocaleString()} · Publicado: ${deal.product_price_public ?? "—"}
+          </div>
+
+          <div style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
+            {deal.product_description ?? "(sin descripción)"}
+          </div>
+
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <span className="badge">{deal.status ?? "—"}</span>
+
+            <button className="btnGhost" disabled={!buyerLink} onClick={() => buyerLink && copy(buyerLink)}>
+              Copiar link comprador
+            </button>
+
+            {buyerLink && (
+              <a className="btnGhost" href={buyerLink} target="_blank" rel="noreferrer">
+                Abrir link comprador
+              </a>
+            )}
+          </div>
+
+          <div className="small muted" style={{ marginTop: 12 }}>Deal ID: {deal.id}</div>
+        </div>
+
+        {/* Términos + acciones */}
+        <div className="card">
+          <div style={{ fontWeight: 900, marginBottom: 10 }}>Términos y acciones</div>
+
+          <div className="small muted" style={{ marginBottom: 8 }}>Vendedor (interno)</div>
+          <div className="small">Inicial: ${terms?.seller_initial ?? "—"}</div>
+          <div className="small">Mínimo: ${terms?.seller_min ?? "—"}</div>
+          <div className="small">Mínimo actual: ${terms?.seller_min_current ?? "—"}</div>
+          <div className="small">Urgencia: {terms?.seller_urgency ?? "—"}</div>
+
+          <div style={{ height: 12 }} />
+
+          <div className="small muted" style={{ marginBottom: 8 }}>Comprador</div>
+          <div className="small">Máximo: ${terms?.buyer_max ?? "—"}</div>
+          <div className="small">Oferta inicial: ${terms?.buyer_initial_offer ?? "—"}</div>
+          <div className="small">Urgencia: {terms?.buyer_urgency ?? "—"}</div>
+
+          <div style={{ height: 14 }} />
+
+          <div className="btnRow">
+            <button className="btnPrimary" disabled={busy} onClick={requestAIProposal}>
+              {busy ? "Procesando…" : "Generar propuesta IA"}
+            </button>
+          </div>
+
+          <div className="btnRow" style={{ marginTop: 10 }}>
+            <button className="btnGhost" disabled={busy} onClick={() => setStatus("accepted")}>
+              Aceptar
+            </button>
+            <button className="btnGhost" disabled={busy} onClick={() => setStatus("rejected")}>
+              Rechazar
+            </button>
+            <button className="btnGhost" disabled={busy} onClick={() => setStatus("active")}>
+              Reabrir
+            </button>
+          </div>
+
+          <div className="small muted" style={{ marginTop: 12 }}>
+            Última actualización: {terms?.updated_at ? new Date(terms.updated_at).toLocaleString() : "—"}
+          </div>
+        </div>
+      </div>
+
+      {/* Offers */}
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 900, marginBottom: 10 }}>Ofertas</div>
+        {offers.length === 0 ? (
+          <div className="muted">Aún no hay ofertas.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {offers.map((o) => (
+              <div
+                key={o.id}
+                style={{
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 12,
+                  padding: 12,
+                  background: "rgba(0,0,0,0.18)",
+                }}
+              >
+                <div className="small muted">{new Date(o.created_at).toLocaleString()}</div>
+                <div style={{ marginTop: 6 }}>
+                  <b>{o.side ?? "offer"}</b> · <b>${o.amount ?? "—"}</b>
+                </div>
+                {o.summary ? <div style={{ marginTop: 8 }}>{o.summary}</div> : null}
               </div>
-
-              <div className="small" style={{ marginTop: 10 }}>
-                {dealStatus === "pending_seller"
-                  ? "⏳ Esperando aprobación del vendedor…"
-                  : dealStatus === "accepted"
-                  ? "🎉 Trato aprobado."
-                  : dealStatus === "rejected"
-                  ? "❌ Rechazado. Puedes intentar otra oferta."
-                  : "Escribe para seguir negociando."}
-              </div>
-
-              <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                <input
-                  value={text}
-                  disabled={buyerInputDisabled}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder={buyerInputDisabled ? "Negociación pausada..." : "Escribe tu oferta..."}
-                  onKeyDown={(e) => e.key === "Enter" && buyerSend()}
-                />
-                <button className="btnPrimary" disabled={buyerInputDisabled} onClick={buyerSend}>
-                  {busy ? "..." : "Enviar"}
-                </button>
-              </div>
-            </section>
-
-            <aside className="card">
-              <h3 className="cardTitle">Última propuesta IA</h3>
-              {!latestOffer ? (
-                <div className="muted">Aún no hay propuesta.</div>
-              ) : (
-                <>
-                  <div className="productPrice">${latestOffer.proposed_price}</div>
-                  {latestOffer.rationale && (
-                    <div className="muted" style={{ marginTop: 8 }}>
-                      {latestOffer.rationale}
-                    </div>
-                  )}
-                </>
-              )}
-            </aside>
-          </>
+            ))}
+          </div>
         )}
+      </div>
 
-        {/* SELLER */}
-        {role === "seller" && (
-          <>
-            <section className="card">
-              <h3 className="cardTitle">Resumen</h3>
-              <div className="small">Inicio: {startedAt ?? "—"}</div>
-              <div className="small">Mensajes del comprador: {buyerMessages.length}</div>
-
-              <div className="hr" />
-
-              {lastBuyerMsg && (
-                <>
-                  <div className="small">Último mensaje del comprador</div>
-                  <div style={{ marginTop: 6 }}>{lastBuyerMsg}</div>
-                </>
-              )}
-
-              {lastMediatorMsg && (
-                <>
-                  <div className="hr" />
-                  <div className="small">Última respuesta IA</div>
-                  <div style={{ marginTop: 6 }}>{lastMediatorMsg}</div>
-                </>
-              )}
-            </section>
-
-            <aside className="card">
-              <h3 className="cardTitle">Propuesta</h3>
-
-              {!latestOffer ? (
-                <div className="muted">Aún no hay propuesta.</div>
-              ) : (
-                <>
-                  <div className="productPrice">${latestOffer.proposed_price}</div>
-                  {latestOffer.rationale && (
-                    <div className="muted" style={{ marginTop: 8 }}>
-                      {latestOffer.rationale}
-                    </div>
-                  )}
-
-                  <div className="btnRow" style={{ marginTop: 12 }}>
-                    <button
-                      className="btnPrimary"
-                      disabled={busy || dealStatus !== "pending_seller"}
-                      onClick={() => sellerRespond("accept")}
-                    >
-                      Aprobar
-                    </button>
-                    <button
-                      className="btnDanger"
-                      disabled={busy || dealStatus !== "pending_seller"}
-                      onClick={() => sellerRespond("reject")}
-                    >
-                      Rechazar
-                    </button>
-                  </div>
-
-                  <div className="hr" />
-
-                  <div className="small">Ajustar mínimo</div>
-                  <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-                    <input
-                      value={newMin}
-                      onChange={(e) => setNewMin(e.target.value)}
-                      placeholder="Nuevo mínimo (ej: 850)"
-                    />
-                    <button className="btnGhost" disabled={busy || !newMin.trim()} onClick={updateMin}>
-                      Guardar
-                    </button>
-                  </div>
-
-                  <div className="small" style={{ marginTop: 8 }}>
-                    Ajustar mínimo vuelve el deal a <b>active</b>.
-                  </div>
-                </>
-              )}
-            </aside>
-          </>
+      {/* Messages */}
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 900, marginBottom: 10 }}>Mensajes</div>
+        {messages.length === 0 ? (
+          <div className="muted">Aún no hay mensajes.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {messages.map((m) => (
+              <div
+                key={m.id}
+                style={{
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: 12,
+                  padding: 12,
+                  background: "rgba(0,0,0,0.18)",
+                }}
+              >
+                <div className="small muted">
+                  {new Date(m.created_at).toLocaleString()} · {m.role ?? "msg"}
+                </div>
+                <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{m.content ?? ""}</div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </main>

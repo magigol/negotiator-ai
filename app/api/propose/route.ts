@@ -1,270 +1,272 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-type Urgency = "low" | "medium" | "high";
+type ProposeReq = {
+  dealId: string;
+  sellerToken?: string; // el token de /deal/[token]
+};
 
-function mustEnv(name: string) {
+function assertEnv(name: string) {
   const v = process.env[name];
-  if (!v) throw new Error(`Falta variable de entorno: ${name}`);
+  if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
 }
 
-const supabaseAdmin = createClient(
-  mustEnv("NEXT_PUBLIC_SUPABASE_URL"),
-  mustEnv("SUPABASE_SERVICE_ROLE_KEY") // server-only
-);
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
 }
 
-function urgencyWeight(u?: Urgency) {
-  if (u === "high") return 0.7;
-  if (u === "low") return 0.3;
-  return 0.5;
-}
-
-async function callOpenAI(system: string, user: string) {
-  const apiKey = mustEnv("OPENAI_API_KEY");
-
-  const r = await fetch("https://api.openai.com/v1/chat/completions", {
+async function callOpenAI({
+  apiKey,
+  model,
+  input,
+}: {
+  apiKey: string;
+  model: string;
+  input: any;
+}) {
+  const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-4.1-mini",
-      temperature: 0.4,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
+      model,
+      temperature: 0.2,
+      // Pedimos salida de texto (pero en JSON)
+      input,
     }),
   });
 
-  if (!r.ok) {
-    const txt = await r.text();
-    throw new Error(`OpenAI error (${r.status}): ${txt}`);
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      json?.error?.message ||
+      json?.message ||
+      `OpenAI error (${res.status})`;
+    throw new Error(msg);
   }
 
-  const data = await r.json();
-  return data?.choices?.[0]?.message?.content ?? "{}";
+  // Responses API suele exponer output_text
+  const outputText: string =
+    json?.output_text ||
+    json?.output?.[0]?.content?.[0]?.text ||
+    "";
+
+  if (!outputText) throw new Error("OpenAI returned empty output_text");
+  return outputText;
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const dealId = body?.dealId;
+    const { dealId, sellerToken } = (await req.json()) as ProposeReq;
 
     if (!dealId) {
-      return NextResponse.json({ error: "dealId requerido" }, { status: 400 });
+      return NextResponse.json({ error: "dealId is required" }, { status: 400 });
     }
 
-    // 1) Leer deal (para status actual)
-    const { data: deal, error: dErr } = await supabaseAdmin
+    const supabaseUrl = assertEnv("NEXT_PUBLIC_SUPABASE_URL");
+    const serviceRole = assertEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const openaiKey = assertEnv("OPENAI_API_KEY");
+
+    // Admin client (bypassa RLS) para que el server pueda leer/escribir seguro
+    const admin = createClient(supabaseUrl, serviceRole, {
+      auth: { persistSession: false },
+    });
+
+    // 1) Validar sellerToken (recomendado)
+    if (sellerToken) {
+      const { data: part, error: partErr } = await admin
+        .from("deal_participants")
+        .select("deal_id, role")
+        .eq("token", sellerToken)
+        .maybeSingle();
+
+      if (partErr) throw partErr;
+
+      if (!part || part.role !== "seller" || part.deal_id !== dealId) {
+        return NextResponse.json(
+          { error: "Invalid sellerToken for this deal" },
+          { status: 403 }
+        );
+      }
+    }
+
+    // 2) Cargar deal + terms
+    const { data: deal, error: dealErr } = await admin
       .from("deals")
-      .select("id,status")
+      .select(
+        "id,status,product_title,product_description,product_price_public,product_image_url"
+      )
       .eq("id", dealId)
       .single();
+    if (dealErr) throw dealErr;
 
-    if (dErr || !deal) {
-      return NextResponse.json({ error: "Deal no encontrado" }, { status: 404 });
-    }
-
-    // Si ya está esperando aprobación, no generes más propuestas
-    if (deal.status === "pending_seller") {
-      return NextResponse.json({
-        ok: true,
-        pending_seller: true,
-        message: "Ya existe una propuesta esperando aprobación del vendedor.",
-      });
-    }
-
-    // 2) Obtener términos
-    const { data: terms, error: tErr } = await supabaseAdmin
+    const { data: terms, error: termsErr } = await admin
       .from("deal_terms")
-      .select("*")
+      .select(
+        "deal_id,seller_initial,seller_min,seller_min_current,seller_urgency,buyer_max,buyer_initial_offer,buyer_urgency"
+      )
       .eq("deal_id", dealId)
-      .single();
+      .maybeSingle();
+    if (termsErr) throw termsErr;
 
-    if (tErr || !terms) {
+    if (!terms) {
       return NextResponse.json(
-        { error: "No se encontraron términos en deal_terms", detail: tErr?.message },
+        { error: "deal_terms not found for dealId" },
+        { status: 404 }
+      );
+    }
+
+    const sellerMin = Number(terms.seller_min ?? 0);
+    const sellerMinCurrent = Number(terms.seller_min_current ?? sellerMin);
+    const sellerInitial = Number(terms.seller_initial ?? 0);
+
+    const buyerMax = Number(terms.buyer_max ?? 0);
+    const buyerInitial = Number(terms.buyer_initial_offer ?? 0);
+
+    // Si el buyer todavía no llenó términos, no hay con qué negociar
+    if (!buyerMax || !buyerInitial) {
+      return NextResponse.json(
+        { error: "Buyer terms are missing (buyer_max / buyer_initial_offer)" },
         { status: 400 }
       );
     }
 
-    const sellerMin = Number(terms.seller_min_current ?? terms.seller_min);
-    const sellerInitial = Number(terms.seller_initial);
-    const buyerMax = Number(terms.buyer_max);
-    const buyerOffer = Number(terms.buyer_initial_offer);
+    // 3) Heurística base (si el modelo se cae, igual devolvemos algo)
+    // Si no hay cruce, sugerimos contra-oferta en el mínimo del vendedor.
+    const hasOverlap = buyerMax >= sellerMinCurrent;
+    const mid = (buyerMax + sellerMinCurrent) / 2;
+    const suggested = hasOverlap
+      ? Math.round(mid) // redondeo simple
+      : Math.round(sellerMinCurrent);
 
-    if (![sellerMin, sellerInitial, buyerMax, buyerOffer].every(Number.isFinite)) {
-      return NextResponse.json(
-        {
-          error: "Faltan números válidos en deal_terms",
-          detail: {
-            seller_min: terms.seller_min,
-            seller_initial: terms.seller_initial,
-            buyer_max: terms.buyer_max,
-            buyer_initial_offer: terms.buyer_initial_offer,
-          },
-        },
-        { status: 400 }
-      );
-    }
+    const offerFloor = hasOverlap ? sellerMinCurrent : sellerMinCurrent;
+    const offerCeil = hasOverlap ? buyerMax : sellerMinCurrent;
 
-    // 3) Cargar últimos mensajes
-    const { data: msgs, error: mErr } = await supabaseAdmin
-      .from("messages")
-      .select("sender_role, content, created_at")
-      .eq("deal_id", dealId)
-      .order("created_at", { ascending: false })
-      .limit(20);
+    const offerCandidate = clamp(suggested, offerFloor, offerCeil);
 
-    if (mErr) {
-      return NextResponse.json({ error: "Error leyendo mensajes", detail: mErr.message }, { status: 500 });
-    }
+    // 4) Llamada a OpenAI (devuelve JSON)
+    const model = "gpt-5.1-mini"; // buen balance costo/latencia
+    const system = `
+Eres un negociador experto. Tu objetivo es proponer un acuerdo que maximice la probabilidad de cierre y deje a ambas partes "conformes".
+Devuelve SIEMPRE un JSON válido con esta forma:
 
-    const history =
-      (msgs ?? [])
-        .reverse()
-        .map((m) => `${m.sender_role}: ${m.content}`)
-        .join("\n") || "(sin mensajes aún)";
-
-    // 4) Calcular propuesta numérica (reglas duras)
-    const hasZone = buyerMax >= sellerMin;
-
-    let proposed: number;
-
-    if (hasZone) {
-      const bw = urgencyWeight(terms.buyer_urgency);
-      const sw = urgencyWeight(terms.seller_urgency);
-
-      const min = sellerMin;
-      const max = buyerMax;
-
-      const mid = (min + max) / 2;
-      const skew = (bw - sw) * (max - min) * 0.25;
-
-      proposed = clamp(mid + skew, min, max);
-      proposed = clamp(proposed * 0.7 + buyerOffer * 0.3, min, max);
-      proposed = Math.round(proposed);
-    } else {
-      // solo informativo
-      proposed = Math.round((buyerMax + sellerMin) / 2);
-    }
-
-    // 5) Generar texto mediador (pero NO inventa el precio)
-    const system = `Eres un mediador neutral entre comprador y vendedor.
-Objetivo: ayudar a llegar a un acuerdo justo y rápido.
-Reglas:
-- NO inventes un precio. El precio lo entrega el sistema.
-- Escribe corto, claro y respetuoso.
-- Si hay zona de acuerdo: presenta la propuesta y explica por qué es razonable.
-- Si NO hay zona de acuerdo: explica el gap y propone 1 alternativa no monetaria (entrega, garantía, forma de pago, etc.).
-- Devuelve SOLO JSON.`;
-
-    const user = `Datos:
-seller_initial: ${sellerInitial}
-seller_min: ${sellerMin}
-buyer_max: ${buyerMax}
-buyer_initial_offer: ${buyerOffer}
-hay_zona_de_acuerdo: ${hasZone}
-precio_propuesto_por_sistema: ${proposed}
-
-Historial:
-${history}
-
-Devuelve SOLO este JSON:
 {
-  "message": "texto breve para el comprador",
-  "rationale": "razón breve y racional",
-  "non_price_option": "una alternativa no monetaria concreta"
-}`;
+  "offer_price": number,
+  "rationale": string,
+  "seller_message": string,
+  "buyer_message": string
+}
 
-    const content = await callOpenAI(system, user);
+Reglas:
+- offer_price debe estar entre seller_min_current y buyer_max cuando exista cruce.
+- Si buyer_max < seller_min_current, offer_price debe ser seller_min_current (explica que no hay cruce y por qué).
+- Mensajes cortos, convincentes, sin revelar información interna (no digas "buyer_max" ni "seller_min").
+- Usa moneda "$" en los mensajes.
+`.trim();
 
-    let parsed: any;
+    const user = {
+      deal: {
+        title: deal.product_title,
+        description: deal.product_description,
+        public_price: deal.product_price_public,
+      },
+      terms: {
+        seller_initial: sellerInitial,
+        seller_min: sellerMin,
+        seller_min_current: sellerMinCurrent,
+        seller_urgency: terms.seller_urgency,
+        buyer_max: buyerMax,
+        buyer_initial_offer: buyerInitial,
+        buyer_urgency: terms.buyer_urgency,
+      },
+      hint: {
+        heuristic_offer_price: offerCandidate,
+      },
+    };
+
+    const outputText = await callOpenAI({
+      apiKey: openaiKey,
+      model,
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: JSON.stringify(user) },
+      ],
+    });
+
+    let proposal: {
+      offer_price: number;
+      rationale: string;
+      seller_message: string;
+      buyer_message: string;
+    };
+
     try {
-      parsed = JSON.parse(content);
+      proposal = JSON.parse(outputText);
     } catch {
-      parsed = {
-        message: String(content),
-        rationale: "Propuesta calculada dentro de límites.",
-        non_price_option: "",
+      // Fallback si el modelo devolvió texto raro
+      proposal = {
+        offer_price: offerCandidate,
+        rationale:
+          "Propuesta heurística: punto medio entre el mínimo actual del vendedor y el máximo del comprador (o mínimo actual si no hay cruce).",
+        seller_message: `Propongo cerrar en $${offerCandidate}. Es un punto equilibrado que aumenta la probabilidad de venta sin regalar margen.`,
+        buyer_message: `Podemos cerrar en $${offerCandidate}. Es un trato justo considerando el precio publicado y el estado del producto.`,
       };
     }
 
-    // 6) Persistir y publicar
-    if (hasZone) {
-      // Validación dura
-      if (!(proposed >= sellerMin && proposed <= buyerMax)) {
-        throw new Error("Propuesta fuera de límites (inconsistencia interna)");
-      }
-
-      // Guardar oferta (con campos opcionales buyer_status/seller_status si existen)
-      // Si tu tabla offers NO tiene buyer_status/seller_status, no pasa nada si los quitas.
-      const { error: oErr } = await supabaseAdmin.from("offers").insert({
-        deal_id: dealId,
-        proposed_price: proposed,
-        rationale: parsed?.rationale || null,
-        buyer_status: null,
-        seller_status: null,
-      } as any);
-
-      if (oErr) throw new Error(`Supabase offers insert error: ${oErr.message}`);
-
-      // Cambiar estado a pending_seller (aprobación requerida)
-      const { error: updErr } = await supabaseAdmin
-        .from("deals")
-        .update({ status: "pending_seller" })
-        .eq("id", dealId);
-
-      if (updErr) throw new Error(`Supabase deals update error: ${updErr.message}`);
-
-      // Mensaje al comprador (IA)
-      const msg = `${parsed?.message ?? ""}
-
-📌 Propuesta: ${proposed}
-🔎 Extra: ${parsed?.non_price_option ?? ""}
-
-⏳ Estoy consultando al vendedor para la aprobación final.`.trim();
-
-      const { error: insErr } = await supabaseAdmin.from("messages").insert({
-        deal_id: dealId,
-        sender_role: "mediator",
-        content: msg,
-      });
-
-      if (insErr) throw new Error(`Supabase messages insert error: ${insErr.message}`);
-
-      return NextResponse.json({ ok: true, pending_seller: true, proposed_price: proposed });
+    // Normalizar offer_price dentro de rango seguro
+    if (hasOverlap) {
+      proposal.offer_price = clamp(
+        Number(proposal.offer_price),
+        sellerMinCurrent,
+        buyerMax
+      );
     } else {
-      // No hay zona de acuerdo -> seguimos activos
-      const msg = `${parsed?.message ?? "Con los límites actuales no hay zona de acuerdo."}
-
-📌 Rango no cruza: comprador hasta ${buyerMax}, vendedor mínimo ${sellerMin}.
-🔎 Alternativa: ${parsed?.non_price_option ?? ""}`.trim();
-
-      const { error: insErr } = await supabaseAdmin.from("messages").insert({
-        deal_id: dealId,
-        sender_role: "mediator",
-        content: msg,
-      });
-
-      if (insErr) throw new Error(`Supabase messages insert error: ${insErr.message}`);
-
-      // Asegurar que sigue active (por si estaba en otro estado)
-      await supabaseAdmin.from("deals").update({ status: "active" }).eq("id", dealId);
-
-      return NextResponse.json({ ok: true, no_zone: true });
+      proposal.offer_price = sellerMinCurrent;
     }
+
+    // 5) (Opcional) Guardar en offers/messages si existen columnas compatibles
+    // Si tus columnas no coinciden, esto no debería romper el endpoint.
+    try {
+      await admin.from("offers").insert({
+        deal_id: dealId,
+        // Si tu tabla tiene otros nombres, cámbialos aquí:
+        amount: proposal.offer_price,
+        side: "ai",
+        summary: proposal.rationale,
+        status: "proposed",
+      } as any);
+    } catch {
+      // ignore
+    }
+
+    try {
+      await admin.from("messages").insert({
+        deal_id: dealId,
+        role: "ai",
+        content: `Propuesta: $${proposal.offer_price}\n\n${proposal.rationale}`,
+      } as any);
+    } catch {
+      // ignore
+    }
+
+    return NextResponse.json({
+      ok: true,
+      dealId,
+      proposal,
+      meta: {
+        hasOverlap,
+        sellerMinCurrent,
+        buyerMax,
+        heuristicOffer: offerCandidate,
+      },
+    });
   } catch (e: any) {
-    console.error("PROPOSE ERROR:", e);
+    console.error(e);
     return NextResponse.json(
-      { error: e?.message ?? String(e), stack: e?.stack ?? null },
+      { error: e?.message ?? "Internal error" },
       { status: 500 }
     );
   }
