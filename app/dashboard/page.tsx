@@ -11,16 +11,30 @@ type DealRow = {
   product_title: string | null;
   product_price_public: number | null;
   product_image_url: string | null;
+  owner_user_id: string | null;
 };
 
 export default function DashboardPage() {
   const [deals, setDeals] = useState<DealRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
+    let mounted = true;
+
     (async () => {
-      const { data: auth } = await supabase.auth.getUser();
+      setLoading(true);
+      setErrMsg(null);
+
+      const { data: auth, error: authError } = await supabase.auth.getUser();
+      if (authError) {
+        if (!mounted) return;
+        setErrMsg(authError.message);
+        setLoading(false);
+        return;
+      }
+
       if (!auth?.user) {
         router.push("/login");
         return;
@@ -28,13 +42,28 @@ export default function DashboardPage() {
 
       const { data, error } = await supabase
         .from("deals")
-        .select("id,status,created_at,product_title,product_price_public,product_image_url")
+        .select(
+          "id,status,created_at,product_title,product_price_public,product_image_url,owner_user_id"
+        )
+        .eq("owner_user_id", auth.user.id) // ✅ SOLO tus deals
         .order("created_at", { ascending: false })
         .limit(100);
 
-      if (!error) setDeals((data ?? []) as DealRow[]);
+      if (!mounted) return;
+
+      if (error) {
+        setErrMsg(error.message);
+        setDeals([]);
+      } else {
+        setDeals((data ?? []) as DealRow[]);
+      }
+
       setLoading(false);
     })();
+
+    return () => {
+      mounted = false;
+    };
   }, [router]);
 
   async function logout() {
@@ -52,10 +81,28 @@ export default function DashboardPage() {
           <div className="sub">Tus publicaciones</div>
         </div>
         <div className="btnRow">
-          <a className="btnGhost" href="/create">Crear</a>
-          <button className="btnGhost" onClick={logout}>Salir</button>
+          <a className="btnGhost" href="/create">
+            Crear
+          </a>
+          <button className="btnGhost" onClick={logout}>
+            Salir
+          </button>
         </div>
       </div>
+
+      {errMsg && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid rgba(255,80,80,.35)",
+            background: "rgba(255,80,80,.08)",
+          }}
+        >
+          {errMsg}
+        </div>
+      )}
 
       <div className="grid" style={{ marginTop: 12 }}>
         {deals.map((d) => (
@@ -66,14 +113,27 @@ export default function DashboardPage() {
               ) : (
                 <div className="productImg" />
               )}
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <div style={{ fontWeight: 800 }}>{d.product_title ?? "(sin título)"}</div>
+
+              <div style={{ width: "100%" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ fontWeight: 800 }}>
+                    {d.product_title ?? "(sin título)"}
+                  </div>
                   <span className="badge">{d.status}</span>
                 </div>
+
                 <div className="small" style={{ marginTop: 6 }}>
-                  {new Date(d.created_at).toLocaleString()} · ${d.product_price_public ?? "—"}
+                  {new Date(d.created_at).toLocaleString()} · $
+                  {d.product_price_public ?? "—"}
                 </div>
+
                 <div className="small" style={{ marginTop: 8 }}>
                   Deal ID: {d.id}
                 </div>
@@ -81,7 +141,10 @@ export default function DashboardPage() {
             </div>
           </div>
         ))}
-        {deals.length === 0 && <div className="muted">Aún no tienes publicaciones.</div>}
+
+        {!errMsg && deals.length === 0 && (
+          <div className="muted">Aún no tienes publicaciones.</div>
+        )}
       </div>
     </main>
   );
