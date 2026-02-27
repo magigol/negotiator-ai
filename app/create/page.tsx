@@ -5,163 +5,186 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Urgency = "low" | "medium" | "high";
-const BUCKET = process.env.NEXT_PUBLIC_SUPABASE_BUCKET ?? "product-images";
 
-function randToken(len = 32) {
-  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let out = "";
-  crypto.getRandomValues(new Uint8Array(len)).forEach((n) => (out += chars[n % chars.length]));
-  return out;
-}
-
-export default function CreatePage() {
+export default function CreateDealPage() {
   const router = useRouter();
 
-  const [loading, setLoading] = useState(true);
-  const [sessionEmail, setSessionEmail] = useState<string | null>(null);
+  // 🔧 Ajusta esto si tu bucket tiene otro nombre
+  // (por ejemplo: "product-images", "product_images", etc.)
+  const STORAGE_BUCKET =
+    process.env.NEXT_PUBLIC_SUPABASE_BUCKET ?? "product-images";
 
-  // producto
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Producto
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [publicPrice, setPublicPrice] = useState<number>(0);
+  const [pricePublic, setPricePublic] = useState<number>(0);
+  const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  // términos vendedor (internos)
+  // Términos vendedor
   const [sellerInitial, setSellerInitial] = useState<number>(0);
   const [sellerMin, setSellerMin] = useState<number>(0);
   const [sellerUrgency, setSellerUrgency] = useState<Urgency>("medium");
 
-  // imagen
-  const [file, setFile] = useState<File | null>(null);
-  const [localPreview, setLocalPreview] = useState<string | null>(null);
-
-  // resultado
-  const [sellerLink, setSellerLink] = useState<string | null>(null);
-  const [buyerLink, setBuyerLink] = useState<string | null>(null);
-
-  const [errMsg, setErrMsg] = useState<string | null>(null);
-  const origin = useMemo(() => (typeof window !== "undefined" ? window.location.origin : ""), []);
+  // Crea token de vendedor (recomendado)
+  const [createSellerToken, setCreateSellerToken] = useState(true);
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data?.user) {
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user) {
         router.push("/login");
         return;
       }
-      setSessionEmail(data.user.email ?? null);
       setLoading(false);
     })();
   }, [router]);
 
-  useEffect(() => {
-    if (!file) {
-      setLocalPreview(null);
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setLocalPreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+  const canSubmit = useMemo(() => {
+    if (!title.trim()) return false;
+    if (pricePublic <= 0) return false;
+    if (sellerInitial <= 0) return false;
+    if (sellerMin <= 0) return false;
+    if (sellerMin > sellerInitial) return false; // regla típica
+    if (!file) return false; // si quieres permitir sin imagen, cambia esto
+    return true;
+  }, [title, pricePublic, sellerInitial, sellerMin, file]);
 
-  function reset() {
+  function resetForm() {
     setTitle("");
     setDescription("");
-    setPublicPrice(0);
+    setPricePublic(0);
     setSellerInitial(0);
     setSellerMin(0);
     setSellerUrgency("medium");
     setFile(null);
-    setLocalPreview(null);
-    setSellerLink(null);
-    setBuyerLink(null);
-    setErrMsg(null);
+    setPreviewUrl(null);
+    setErrorMsg(null);
   }
 
-  async function handleCreate() {
-    setErrMsg(null);
-    setSellerLink(null);
-    setBuyerLink(null);
+  async function uploadImageOrThrow(userId: string, dealId: string, f: File) {
+    // Nombre único
+    const ext = f.name.split(".").pop() || "jpg";
+    const path = `${userId}/${dealId}.${ext}`;
 
-    // validaciones mínimas
-    if (!title.trim()) return setErrMsg("Falta el título.");
-    if (!publicPrice || publicPrice <= 0) return setErrMsg("El precio publicado debe ser > 0.");
-    if (!sellerInitial || sellerInitial <= 0) return setErrMsg("El precio inicial interno debe ser > 0.");
-    if (!sellerMin || sellerMin <= 0) return setErrMsg("El precio mínimo interno debe ser > 0.");
-    if (sellerMin > sellerInitial) return setErrMsg("El precio mínimo no puede ser mayor que el inicial.");
+    const { error: upErr } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(path, f, {
+        upsert: true,
+        contentType: f.type || "image/jpeg",
+        cacheControl: "3600",
+      });
 
-    const { data: auth, error: authErr } = await supabase.auth.getUser();
-    if (authErr) return setErrMsg(authErr.message);
-    if (!auth?.user) {
-      router.push("/login");
+    if (upErr) throw new Error(`Error subiendo imagen: ${upErr.message}`);
+
+    const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+    const publicUrl = data?.publicUrl;
+
+    if (!publicUrl) throw new Error("No se pudo obtener la URL pública de la imagen.");
+
+    return publicUrl;
+  }
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setErrorMsg(null);
+
+    if (!canSubmit) {
+      setErrorMsg(
+        "Revisa el formulario: título, precio público, términos del vendedor (min <= inicial) e imagen."
+      );
       return;
     }
 
-    // 1) crear deal (sin imagen aún)
-    const { data: deal, error: dealErr } = await supabase
-      .from("deals")
-      .insert({
-        status: "active",
-        product_title: title.trim(),
-        product_description: description.trim() || null,
-        product_price_public: publicPrice,
-        product_image_url: null,
-        owner_user_id: auth.user.id, // ✅ clave para RLS
-      })
-      .select("id")
-      .single();
+    setSaving(true);
 
-    if (dealErr) return setErrMsg(dealErr.message);
-    const dealId = deal.id as string;
+    try {
+      const { data: auth, error: authErr } = await supabase.auth.getUser();
+      if (authErr) throw new Error(authErr.message);
+      if (!auth?.user) {
+        router.push("/login");
+        return;
+      }
 
-    // 2) subir imagen (opcional) y guardar URL pública
-    let publicImageUrl: string | null = null;
+      const userId = auth.user.id;
 
-    if (file) {
-      const ext = file.name.split(".").pop() || "jpg";
-      const path = `deals/${dealId}/cover.${ext}`;
+      // 1) Crear deal (sin imagen todavía)
+      const { data: dealInserted, error: dealErr } = await supabase
+        .from("deals")
+        .insert({
+          status: "active",
+          approval_required: false, // ajusta si lo usas
+          product_title: title.trim(),
+          product_description: description.trim() || null,
+          product_price_public: pricePublic,
+          product_image_url: null, // lo actualizamos después del upload
+          owner_user_id: userId,
+        })
+        .select("id")
+        .single();
 
-      const { error: upErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, file, { upsert: true, contentType: file.type });
+      if (dealErr) throw new Error(dealErr.message);
+      const dealId = dealInserted.id as string;
 
-      if (upErr) return setErrMsg(`Error subiendo imagen: ${upErr.message}`);
-
-      const { data: pub } = supabase.storage.from(BUCKET).getPublicUrl(path);
-      publicImageUrl = pub.publicUrl ?? null;
+      // 2) Subir imagen y actualizar el deal con product_image_url
+      const imageUrl = await uploadImageOrThrow(userId, dealId, file!);
 
       const { error: updErr } = await supabase
         .from("deals")
-        .update({ product_image_url: publicImageUrl })
+        .update({ product_image_url: imageUrl })
         .eq("id", dealId);
 
-      if (updErr) return setErrMsg(`Error guardando URL de imagen: ${updErr.message}`);
+      if (updErr) throw new Error(`No se pudo guardar la URL de la imagen: ${updErr.message}`);
+
+      // 3) Insertar deal_terms (1 fila por deal)
+      const { error: termsErr } = await supabase.from("deal_terms").insert({
+        deal_id: dealId,
+        seller_initial: sellerInitial,
+        seller_min: sellerMin,
+        seller_min_current: sellerMin, // importante
+        seller_urgency: sellerUrgency,
+        // buyer_* quedan null (aún no hay comprador)
+      });
+
+      if (termsErr) {
+        // intento rollback simple (puede fallar por RLS si no tienes policy de delete)
+        await supabase.from("deals").delete().eq("id", dealId);
+        throw new Error(
+          `Se creó el deal pero falló deal_terms: ${termsErr.message}. Intenté revertir el deal.`
+        );
+      }
+
+      // 4) (Opcional) Insertar participante vendedor con token
+      if (createSellerToken) {
+        const token =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+        const { error: partErr } = await supabase.from("deal_participants").insert({
+          deal_id: dealId,
+          role: "seller",
+          token,
+        });
+
+        // Si esto falla, NO rompemos el flujo (el deal ya existe)
+        if (partErr) {
+          // solo avisamos
+          console.warn("No se pudo crear deal_participants seller:", partErr.message);
+        }
+      }
+
+      // ✅ Listo: navega al deal por ID
+      router.push(`/deal/${dealId}`);
+    } catch (err: any) {
+      setErrorMsg(err?.message ?? "Error desconocido creando la publicación.");
+    } finally {
+      setSaving(false);
     }
-
-    // 3) crear términos (deal_terms)
-    const { error: termsErr } = await supabase.from("deal_terms").insert({
-      deal_id: dealId,
-      seller_initial: sellerInitial,
-      seller_min: sellerMin,
-      seller_min_current: sellerMin,
-      seller_urgency: sellerUrgency,
-      // buyer_* queda null hasta que entre el buyer
-    });
-
-    if (termsErr) return setErrMsg(`Error creando términos: ${termsErr.message}`);
-
-    // 4) crear participantes + tokens (seller y buyer)
-    const sellerToken = randToken(40);
-    const buyerToken = randToken(40);
-
-    const { error: partErr } = await supabase.from("deal_participants").insert([
-      { deal_id: dealId, role: "seller", token: sellerToken },
-      { deal_id: dealId, role: "buyer", token: buyerToken },
-    ]);
-
-    if (partErr) return setErrMsg(`Error creando links: ${partErr.message}`);
-
-    setSellerLink(`${origin}/deal/${sellerToken}`);
-    setBuyerLink(`${origin}/join/${buyerToken}`);
   }
 
   if (loading) return <main className="container">Cargando…</main>;
@@ -171,160 +194,158 @@ export default function CreatePage() {
       <div className="header">
         <div>
           <h1 className="h1">Crear publicación</h1>
-          <div className="sub">Sube tu producto y deja que la IA negocie por ti.</div>
-          {sessionEmail && <div className="small">Sesión: {sessionEmail}</div>}
+          <div className="sub">Sube tu producto y define tus términos como vendedor.</div>
         </div>
-
         <div className="btnRow">
           <a className="btnGhost" href="/dashboard">Dashboard</a>
-          <a className="btnGhost" href="/admin">Admin</a>
         </div>
       </div>
 
-      {errMsg && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: 12,
-            borderRadius: 12,
-            border: "1px solid rgba(255,80,80,.35)",
-            background: "rgba(255,80,80,.08)",
-          }}
-        >
-          {errMsg}
+      {errorMsg && (
+        <div className="card" style={{ marginTop: 12, border: "1px solid rgba(255,0,0,.25)" }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Error</div>
+          <div className="small" style={{ opacity: 0.9 }}>{errorMsg}</div>
         </div>
       )}
 
-      <div className="grid2" style={{ marginTop: 12 }}>
+      <form onSubmit={onSubmit} className="grid" style={{ marginTop: 12, gap: 12 }}>
         {/* Producto */}
         <div className="card">
-          <div style={{ fontWeight: 900, marginBottom: 10 }}>Producto</div>
+          <div style={{ fontWeight: 800, marginBottom: 10 }}>Producto</div>
 
-          <div className="field">
-            <label className="label">Título</label>
-            <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
-          </div>
+          <label className="small">Título</label>
+          <input
+            className="input"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Ej: Zapatilla Samba Adidas Original..."
+          />
 
-          <div className="field">
-            <label className="label">Descripción</label>
-            <textarea
-              className="textarea"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={5}
+          <div style={{ height: 10 }} />
+
+          <label className="small">Descripción</label>
+          <textarea
+            className="textarea"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Estado, detalles, etc."
+            rows={4}
+          />
+
+          <div style={{ height: 10 }} />
+
+          <label className="small">Precio publicado</label>
+          <input
+            className="input"
+            type="number"
+            value={pricePublic}
+            onChange={(e) => setPricePublic(Number(e.target.value))}
+            min={0}
+          />
+
+          <div style={{ height: 10 }} />
+
+          <label className="small">Imagen (archivo)</label>
+          <input
+            className="input"
+            type="file"
+            accept="image/*"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              setFile(f);
+              if (previewUrl) URL.revokeObjectURL(previewUrl);
+              setPreviewUrl(f ? URL.createObjectURL(f) : null);
+            }}
+          />
+
+          <div style={{ height: 10 }} />
+
+          {previewUrl ? (
+            <img
+              src={previewUrl}
+              alt="preview"
+              className="productImg"
+              style={{ width: 220, height: 220, objectFit: "cover", borderRadius: 16 }}
             />
-          </div>
-
-          <div className="field">
-            <label className="label">Precio publicado</label>
-            <input
-              className="input"
-              type="number"
-              value={publicPrice}
-              onChange={(e) => setPublicPrice(Number(e.target.value))}
-            />
-          </div>
-
-          <div className="field">
-            <label className="label">Imagen (archivo)</label>
-            <input
-              className="input"
-              type="file"
-              accept="image/*"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            />
-          </div>
-
-          {localPreview && (
-            <div style={{ marginTop: 12 }}>
-              <div className="small muted" style={{ marginBottom: 8 }}>
-                Preview local (se sube al crear)
-              </div>
-              <img
-                src={localPreview}
-                alt="preview"
-                style={{ width: 240, height: 240, objectFit: "cover", borderRadius: 18 }}
-              />
-            </div>
+          ) : (
+            <div className="muted small">Preview local (se sube al crear)</div>
           )}
         </div>
 
         {/* Términos */}
         <div className="card">
-          <div style={{ fontWeight: 900, marginBottom: 10 }}>Términos del vendedor</div>
+          <div style={{ fontWeight: 800, marginBottom: 10 }}>Términos del vendedor</div>
 
-          <div className="field">
-            <label className="label">Precio inicial (interno)</label>
+          <label className="small">Precio inicial (interno)</label>
+          <input
+            className="input"
+            type="number"
+            value={sellerInitial}
+            onChange={(e) => setSellerInitial(Number(e.target.value))}
+            min={0}
+          />
+
+          <div style={{ height: 10 }} />
+
+          <label className="small">Precio mínimo (interno)</label>
+          <input
+            className="input"
+            type="number"
+            value={sellerMin}
+            onChange={(e) => setSellerMin(Number(e.target.value))}
+            min={0}
+          />
+          {sellerMin > 0 && sellerInitial > 0 && sellerMin > sellerInitial ? (
+            <div className="small" style={{ color: "salmon", marginTop: 6 }}>
+              El mínimo no puede ser mayor que el inicial.
+            </div>
+          ) : null}
+
+          <div style={{ height: 10 }} />
+
+          <label className="small">Urgencia</label>
+          <select
+            className="input"
+            value={sellerUrgency}
+            onChange={(e) => setSellerUrgency(e.target.value as Urgency)}
+          >
+            <option value="low">Baja</option>
+            <option value="medium">Media</option>
+            <option value="high">Alta</option>
+          </select>
+
+          <div style={{ height: 14 }} />
+
+          <label className="small" style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <input
-              className="input"
-              type="number"
-              value={sellerInitial}
-              onChange={(e) => setSellerInitial(Number(e.target.value))}
+              type="checkbox"
+              checked={createSellerToken}
+              onChange={(e) => setCreateSellerToken(e.target.checked)}
             />
-          </div>
+            Crear token de vendedor (recomendado)
+          </label>
 
-          <div className="field">
-            <label className="label">Precio mínimo (interno)</label>
-            <input
-              className="input"
-              type="number"
-              value={sellerMin}
-              onChange={(e) => setSellerMin(Number(e.target.value))}
-            />
-          </div>
+          <div style={{ height: 16 }} />
 
-          <div className="field">
-            <label className="label">Urgencia</label>
-            <select
-              className="input"
-              value={sellerUrgency}
-              onChange={(e) => setSellerUrgency(e.target.value as Urgency)}
-            >
-              <option value="low">Baja</option>
-              <option value="medium">Media</option>
-              <option value="high">Alta</option>
-            </select>
-          </div>
-
-          <div className="btnRow" style={{ marginTop: 12 }}>
-            <button className="btnPrimary" onClick={handleCreate}>
-              Crear publicación
+          <div className="btnRow">
+            <button className="btn" type="submit" disabled={!canSubmit || saving}>
+              {saving ? "Creando…" : "Crear publicación"}
             </button>
-            <button className="btnGhost" onClick={reset}>
+            <button
+              type="button"
+              className="btnGhost"
+              onClick={resetForm}
+              disabled={saving}
+            >
               Limpiar
             </button>
           </div>
 
-          {(sellerLink || buyerLink) && (
-            <div style={{ marginTop: 14 }}>
-              <div className="small muted" style={{ marginBottom: 8 }}>
-                Links generados
-              </div>
-
-              {sellerLink && (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontWeight: 800 }}>Vendedor:</div>
-                  <a className="link" href={sellerLink} target="_blank" rel="noreferrer">
-                    {sellerLink}
-                  </a>
-                </div>
-              )}
-
-              {buyerLink && (
-                <div>
-                  <div style={{ fontWeight: 800 }}>Comprador:</div>
-                  <a className="link" href={buyerLink} target="_blank" rel="noreferrer">
-                    {buyerLink}
-                  </a>
-                  <div className="small muted" style={{ marginTop: 6 }}>
-                    Abre comprador en incógnito para probar.
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          <div className="small muted" style={{ marginTop: 10 }}>
+            Bucket usado: <b>{STORAGE_BUCKET}</b> (si no coincide con el tuyo, cámbialo).
+          </div>
         </div>
-      </div>
+      </form>
     </main>
   );
 }
