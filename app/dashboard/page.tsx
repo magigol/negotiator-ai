@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 type DealRow = {
   id: string;
@@ -22,7 +21,6 @@ export default function DashboardPage() {
   useEffect(() => {
     (async () => {
       const { data: auth } = await supabase.auth.getUser();
-
       if (!auth?.user) {
         router.push("/login");
         return;
@@ -30,9 +28,7 @@ export default function DashboardPage() {
 
       const { data, error } = await supabase
         .from("deals")
-        .select(
-          "id,status,created_at,product_title,product_price_public,product_image_url"
-        )
+        .select("id,status,created_at,product_title,product_price_public,product_image_url")
         .order("created_at", { ascending: false })
         .limit(100);
 
@@ -46,6 +42,10 @@ export default function DashboardPage() {
     router.push("/login");
   }
 
+  function goToDeal(id: string) {
+    router.push(`/deal/${id}`);
+  }
+
   if (loading) return <main className="container">Cargando…</main>;
 
   return (
@@ -56,46 +56,51 @@ export default function DashboardPage() {
           <div className="sub">Tus publicaciones</div>
         </div>
         <div className="btnRow">
-          <Link className="btnGhost" href="/create">
-            Crear
-          </Link>
-          <button className="btnGhost" onClick={logout}>
-            Salir
-          </button>
+          <a className="btnGhost" href="/create">Crear</a>
+          <button className="btnGhost" onClick={logout}>Salir</button>
         </div>
       </div>
 
       <div className="grid" style={{ marginTop: 12 }}>
         {deals.map((d) => (
-          <Link
+          <div
             key={d.id}
-            href={`/deal/${d.id}`}
             className="card"
-            style={{ textDecoration: "none", color: "inherit" }}
+            role="button"
+            tabIndex={0}
+            onClick={() => goToDeal(d.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") goToDeal(d.id);
+            }}
+            style={{ cursor: "pointer" }}
+            title="Ver deal"
           >
             <div className="productCard">
               {d.product_image_url ? (
-                <img
-                  className="productImg"
-                  src={d.product_image_url}
-                  alt="img"
-                />
+                <img className="productImg" src={d.product_image_url} alt="img" />
               ) : (
                 <div className="productImg" />
               )}
 
-              <div>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 12,
-                  }}
-                >
+              <div style={{ width: "100%" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                   <div style={{ fontWeight: 800 }}>
                     {d.product_title ?? "(sin título)"}
                   </div>
-                  <span className="badge">{d.status}</span>
+
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span className="badge">{d.status}</span>
+                    <button
+                      className="btnGhost"
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation(); // evita doble navegación
+                        goToDeal(d.id);
+                      }}
+                    >
+                      Ver deal
+                    </button>
+                  </div>
                 </div>
 
                 <div className="small" style={{ marginTop: 6 }}>
@@ -108,7 +113,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
-          </Link>
+          </div>
         ))}
 
         {deals.length === 0 && (
