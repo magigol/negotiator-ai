@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
 
-type Deal = {
+type DealRow = {
   id: string;
   status: string;
   created_at: string;
@@ -15,85 +15,81 @@ type Deal = {
   owner_user_id: string | null;
 };
 
-function isUuid(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
-}
+type DealTermsRow = {
+  deal_id: string;
+  seller_initial: number | null;
+  seller_min: number | null;
+  seller_min_current: number | null;
+  seller_urgency: string | null;
+  buyer_max: number | null;
+  buyer_initial_offer: number | null;
+  buyer_urgency: string | null;
+  updated_at: string | null;
+};
 
-export default function DealSellerPage() {
-  const params = useParams();
+export default function DealPage({ params }: { params: { id: string } }) {
+  const dealId = params.id;
   const router = useRouter();
 
-  const tokenOrId = useMemo(() => String(params?.token ?? ""), [params]);
-
   const [loading, setLoading] = useState(true);
+  const [deal, setDeal] = useState<DealRow | null>(null);
+  const [terms, setTerms] = useState<DealTermsRow | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [deal, setDeal] = useState<Deal | null>(null);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       setErrorMsg(null);
-      setDeal(null);
 
-      // 1) Si parece UUID => lo tratamos como deal.id (vendedor logeado)
-      if (isUuid(tokenOrId)) {
-        const { data: auth } = await supabase.auth.getUser();
-        if (!auth?.user) {
-          router.push("/login");
-          return;
-        }
-
-        const { data, error } = await supabase
-          .from("deals")
-          .select(
-            "id,status,created_at,product_title,product_description,product_price_public,product_image_url,owner_user_id"
-          )
-          .eq("id", tokenOrId)
-          .eq("owner_user_id", auth.user.id)
-          .maybeSingle();
-
-        if (error || !data) {
-          setErrorMsg("Link inválido (no encontrado o no eres el vendedor).");
-          setLoading(false);
-          return;
-        }
-
-        setDeal(data as Deal);
-        setLoading(false);
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth?.user) {
+        router.push("/login");
         return;
       }
 
-      // 2) Si NO es UUID => flujo token (deal_participants)
-      const { data: participant, error: pErr } = await supabase
-        .from("deal_participants")
-        .select("deal_id, role")
-        .eq("token", tokenOrId)
-        .maybeSingle();
-
-      if (pErr || !participant || participant.role !== "seller") {
-        setErrorMsg("Link inválido (token no encontrado o no es de vendedor).");
-        setLoading(false);
-        return;
-      }
-
-      const { data: d, error: dErr } = await supabase
+      // 1) Deal
+      const { data: dealData, error: dealErr } = await supabase
         .from("deals")
         .select(
           "id,status,created_at,product_title,product_description,product_price_public,product_image_url,owner_user_id"
         )
-        .eq("id", participant.deal_id)
+        .eq("id", dealId)
         .maybeSingle();
 
-      if (dErr || !d) {
-        setErrorMsg("No se pudo cargar el deal.");
+      if (dealErr || !dealData) {
+        setErrorMsg(dealErr?.message ?? "No se encontró el deal.");
         setLoading(false);
         return;
       }
 
-      setDeal(d as Deal);
+      // Si quieres asegurar “solo dueño”
+      if (dealData.owner_user_id && dealData.owner_user_id !== auth.user.id) {
+        setErrorMsg("No tienes permiso para ver este deal.");
+        setLoading(false);
+        return;
+      }
+
+      setDeal(dealData as DealRow);
+
+      // 2) Terms (1 fila por deal)
+      const { data: termsData, error: termsErr } = await supabase
+        .from("deal_terms")
+        .select(
+          "deal_id,seller_initial,seller_min,seller_min_current,seller_urgency,buyer_max,buyer_initial_offer,buyer_urgency,updated_at"
+        )
+        .eq("deal_id", dealId)
+        .maybeSingle();
+
+      if (termsErr) {
+        // Ojo: puede existir el deal pero no sus terms (si falló al crearlo)
+        setTerms(null);
+      } else {
+        setTerms((termsData ?? null) as DealTermsRow | null);
+      }
+
       setLoading(false);
     })();
-  }, [tokenOrId, router]);
+  }, [dealId, router]);
 
   if (loading) return <main className="container">Cargando…</main>;
 
@@ -101,49 +97,110 @@ export default function DealSellerPage() {
     return (
       <main className="container">
         <h1 className="h1">Deal (vendedor)</h1>
-        <div className="muted">{errorMsg}</div>
+        <div className="sub">{errorMsg}</div>
+        <div style={{ marginTop: 16 }}>
+          <button className="btnGhost" onClick={() => router.push("/dashboard")}>
+            Volver
+          </button>
+        </div>
       </main>
     );
   }
+
+  if (!deal) return null;
 
   return (
     <main className="container">
       <div className="header">
         <div>
           <h1 className="h1">Deal (vendedor)</h1>
-          <div className="sub">ID: {deal?.id}</div>
+          <div className="sub">ID: {deal.id}</div>
         </div>
         <div className="btnRow">
-          <a className="btnGhost" href="/dashboard">Volver</a>
+          <button className="btnGhost" onClick={() => router.push("/dashboard")}>
+            Volver
+          </button>
         </div>
       </div>
 
+      {/* Card principal del producto */}
       <div className="card" style={{ marginTop: 12 }}>
         <div className="productCard">
-          {deal?.product_image_url ? (
+          {deal.product_image_url ? (
             <img className="productImg" src={deal.product_image_url} alt="img" />
           ) : (
             <div className="productImg" />
           )}
 
-          <div>
+          <div style={{ width: "100%" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <div style={{ fontWeight: 800 }}>{deal?.product_title ?? "(sin título)"}</div>
-              <span className="badge">{deal?.status}</span>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>
+                {deal.product_title ?? "(sin título)"}
+              </div>
+              <span className="badge">{deal.status}</span>
             </div>
 
             <div className="small" style={{ marginTop: 6 }}>
-              {deal?.created_at ? new Date(deal.created_at).toLocaleString() : ""} · $
-              {deal?.product_price_public ?? "—"}
+              {new Date(deal.created_at).toLocaleString()} · $
+              {deal.product_price_public ?? "—"}
             </div>
 
-            {deal?.product_description && (
+            {deal.product_description ? (
               <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
                 {deal.product_description}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
+      </div>
+
+      {/* Terms */}
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Términos del deal</div>
+
+        {!terms ? (
+          <div className="muted">
+            No se encontraron términos para este deal (tabla deal_terms sin fila).
+          </div>
+        ) : (
+          <div className="grid" style={{ gap: 10 }}>
+            <div className="row">
+              <div className="muted">seller_initial</div>
+              <div>${terms.seller_initial ?? "—"}</div>
+            </div>
+            <div className="row">
+              <div className="muted">seller_min</div>
+              <div>${terms.seller_min ?? "—"}</div>
+            </div>
+            <div className="row">
+              <div className="muted">seller_min_current</div>
+              <div>${terms.seller_min_current ?? "—"}</div>
+            </div>
+            <div className="row">
+              <div className="muted">seller_urgency</div>
+              <div>{terms.seller_urgency ?? "—"}</div>
+            </div>
+
+            <hr style={{ opacity: 0.15 }} />
+
+            <div className="row">
+              <div className="muted">buyer_max</div>
+              <div>${terms.buyer_max ?? "—"}</div>
+            </div>
+            <div className="row">
+              <div className="muted">buyer_initial_offer</div>
+              <div>${terms.buyer_initial_offer ?? "—"}</div>
+            </div>
+            <div className="row">
+              <div className="muted">buyer_urgency</div>
+              <div>{terms.buyer_urgency ?? "—"}</div>
+            </div>
+
+            <div className="small" style={{ marginTop: 10, opacity: 0.7 }}>
+              updated_at: {terms.updated_at ? new Date(terms.updated_at).toLocaleString() : "—"}
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
