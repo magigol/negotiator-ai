@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 type DealRow = {
   id: string;
@@ -11,29 +12,16 @@ type DealRow = {
   product_title: string | null;
   product_price_public: number | null;
   product_image_url: string | null;
-  owner_user_id: string | null;
 };
 
 export default function DashboardPage() {
   const [deals, setDeals] = useState<DealRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [errMsg, setErrMsg] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
-    let mounted = true;
-
     (async () => {
-      setLoading(true);
-      setErrMsg(null);
-
-      const { data: auth, error: authError } = await supabase.auth.getUser();
-      if (authError) {
-        if (!mounted) return;
-        setErrMsg(authError.message);
-        setLoading(false);
-        return;
-      }
+      const { data: auth } = await supabase.auth.getUser();
 
       if (!auth?.user) {
         router.push("/login");
@@ -43,27 +31,14 @@ export default function DashboardPage() {
       const { data, error } = await supabase
         .from("deals")
         .select(
-          "id,status,created_at,product_title,product_price_public,product_image_url,owner_user_id"
+          "id,status,created_at,product_title,product_price_public,product_image_url"
         )
-        .eq("owner_user_id", auth.user.id) // ✅ SOLO tus deals
         .order("created_at", { ascending: false })
         .limit(100);
 
-      if (!mounted) return;
-
-      if (error) {
-        setErrMsg(error.message);
-        setDeals([]);
-      } else {
-        setDeals((data ?? []) as DealRow[]);
-      }
-
+      if (!error) setDeals((data ?? []) as DealRow[]);
       setLoading(false);
     })();
-
-    return () => {
-      mounted = false;
-    };
   }, [router]);
 
   async function logout() {
@@ -81,46 +56,40 @@ export default function DashboardPage() {
           <div className="sub">Tus publicaciones</div>
         </div>
         <div className="btnRow">
-          <a className="btnGhost" href="/create">
+          <Link className="btnGhost" href="/create">
             Crear
-          </a>
+          </Link>
           <button className="btnGhost" onClick={logout}>
             Salir
           </button>
         </div>
       </div>
 
-      {errMsg && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: 12,
-            borderRadius: 12,
-            border: "1px solid rgba(255,80,80,.35)",
-            background: "rgba(255,80,80,.08)",
-          }}
-        >
-          {errMsg}
-        </div>
-      )}
-
       <div className="grid" style={{ marginTop: 12 }}>
         {deals.map((d) => (
-          <div key={d.id} className="card">
+          <Link
+            key={d.id}
+            href={`/deal/${d.id}`}
+            className="card"
+            style={{ textDecoration: "none", color: "inherit" }}
+          >
             <div className="productCard">
               {d.product_image_url ? (
-                <img className="productImg" src={d.product_image_url} alt="img" />
+                <img
+                  className="productImg"
+                  src={d.product_image_url}
+                  alt="img"
+                />
               ) : (
                 <div className="productImg" />
               )}
 
-              <div style={{ width: "100%" }}>
+              <div>
                 <div
                   style={{
                     display: "flex",
                     justifyContent: "space-between",
                     gap: 12,
-                    alignItems: "center",
                   }}
                 >
                   <div style={{ fontWeight: 800 }}>
@@ -139,10 +108,10 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
-          </div>
+          </Link>
         ))}
 
-        {!errMsg && deals.length === 0 && (
+        {deals.length === 0 && (
           <div className="muted">Aún no tienes publicaciones.</div>
         )}
       </div>
