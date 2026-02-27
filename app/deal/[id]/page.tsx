@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 
 type DealRow = {
   id: string;
@@ -27,9 +27,11 @@ type DealTermsRow = {
   updated_at: string | null;
 };
 
-export default function DealPage({ params }: { params: { id: string } }) {
-  const dealId = params.id;
+export default function DealPage() {
   const router = useRouter();
+  const params = useParams<{ id: string }>();
+
+  const dealId = params?.id; // <- ahora sí
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState<DealRow | null>(null);
@@ -40,6 +42,13 @@ export default function DealPage({ params }: { params: { id: string } }) {
     (async () => {
       setLoading(true);
       setErrorMsg(null);
+
+      // ✅ evita query con undefined
+      if (!dealId) {
+        setErrorMsg("No llegó el ID del deal en la URL.");
+        setLoading(false);
+        return;
+      }
 
       const { data: auth } = await supabase.auth.getUser();
       if (!auth?.user) {
@@ -62,7 +71,7 @@ export default function DealPage({ params }: { params: { id: string } }) {
         return;
       }
 
-      // Si quieres asegurar “solo dueño”
+      // Solo dueño (si quieres)
       if (dealData.owner_user_id && dealData.owner_user_id !== auth.user.id) {
         setErrorMsg("No tienes permiso para ver este deal.");
         setLoading(false);
@@ -71,7 +80,7 @@ export default function DealPage({ params }: { params: { id: string } }) {
 
       setDeal(dealData as DealRow);
 
-      // 2) Terms (1 fila por deal)
+      // 2) Terms
       const { data: termsData, error: termsErr } = await supabase
         .from("deal_terms")
         .select(
@@ -80,12 +89,8 @@ export default function DealPage({ params }: { params: { id: string } }) {
         .eq("deal_id", dealId)
         .maybeSingle();
 
-      if (termsErr) {
-        // Ojo: puede existir el deal pero no sus terms (si falló al crearlo)
-        setTerms(null);
-      } else {
-        setTerms((termsData ?? null) as DealTermsRow | null);
-      }
+      if (termsErr) setTerms(null);
+      else setTerms((termsData ?? null) as DealTermsRow | null);
 
       setLoading(false);
     })();
@@ -123,7 +128,6 @@ export default function DealPage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
-      {/* Card principal del producto */}
       <div className="card" style={{ marginTop: 12 }}>
         <div className="productCard">
           {deal.product_image_url ? (
@@ -141,8 +145,7 @@ export default function DealPage({ params }: { params: { id: string } }) {
             </div>
 
             <div className="small" style={{ marginTop: 6 }}>
-              {new Date(deal.created_at).toLocaleString()} · $
-              {deal.product_price_public ?? "—"}
+              {new Date(deal.created_at).toLocaleString()} · ${deal.product_price_public ?? "—"}
             </div>
 
             {deal.product_description ? (
@@ -154,14 +157,11 @@ export default function DealPage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
-      {/* Terms */}
       <div className="card" style={{ marginTop: 12 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Términos del deal</div>
 
         {!terms ? (
-          <div className="muted">
-            No se encontraron términos para este deal (tabla deal_terms sin fila).
-          </div>
+          <div className="muted">No se encontraron términos para este deal.</div>
         ) : (
           <div className="grid" style={{ gap: 10 }}>
             <div className="row">
