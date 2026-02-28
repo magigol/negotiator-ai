@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
-import { useRouter } from "next/navigation";
 
 type DealRow = {
   id: string;
@@ -14,33 +14,37 @@ type DealRow = {
   product_image_url: string | null;
 };
 
-export default function ShopDealPage({ params }: { params: { id: string } }) {
-  const id = params.id;
+export default function ShopProductPage() {
+  const params = useParams();
   const router = useRouter();
 
-  const [loading, setLoading] = useState(true);
+  const dealId = params?.id as string;
+
   const [deal, setDeal] = useState<DealRow | null>(null);
+  const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      setErrorMsg(null);
+    if (!dealId) return;
 
+    (async () => {
       const { data, error } = await supabase
         .from("deals")
-        .select("id,status,created_at,product_title,product_description,product_price_public,product_image_url")
-        .eq("id", id)
+        .select(
+          "id,status,created_at,product_title,product_description,product_price_public,product_image_url"
+        )
+        .eq("id", dealId)
         .maybeSingle();
 
       if (error || !data) {
-        setErrorMsg(error?.message ?? "No se encontró el producto.");
+        setErrorMsg(error?.message ?? "Producto no encontrado.");
       } else {
         setDeal(data as DealRow);
       }
+
       setLoading(false);
     })();
-  }, [id]);
+  }, [dealId]);
 
   if (loading) return <main className="container">Cargando…</main>;
 
@@ -49,9 +53,9 @@ export default function ShopDealPage({ params }: { params: { id: string } }) {
       <main className="container">
         <h1 className="h1">Producto</h1>
         <div className="sub">{errorMsg}</div>
-        <div style={{ marginTop: 16 }}>
-          <button className="btnGhost" onClick={() => router.push("/shop")}>Volver</button>
-        </div>
+        <button className="btnGhost" onClick={() => router.push("/shop")}>
+          Volver
+        </button>
       </main>
     );
   }
@@ -61,35 +65,25 @@ export default function ShopDealPage({ params }: { params: { id: string } }) {
   return (
     <main className="container">
       <div className="header">
-        <div>
-          <h1 className="h1">{deal.product_title ?? "Producto"}</h1>
-          <div className="sub">${deal.product_price_public ?? "—"} · {new Date(deal.created_at).toLocaleString()}</div>
-        </div>
-        <div className="btnRow">
-          <button className="btnGhost" onClick={() => router.push("/shop")}>Volver</button>
-        </div>
+        <h1 className="h1">{deal.product_title}</h1>
       </div>
 
-      <div className="card" style={{ marginTop: 12 }}>
-        <div className="productCard">
-          {deal.product_image_url ? (
-            <img className="productImg" src={deal.product_image_url} alt={deal.product_title ?? "producto"} />
-          ) : (
-            <div className="productImg" />
-          )}
-          <div style={{ width: "100%" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-              <span className="badge">{deal.status}</span>
-            </div>
+      <div className="card">
+        {deal.product_image_url && (
+          <img
+            src={deal.product_image_url}
+            className="productImg"
+            alt="producto"
+          />
+        )}
 
-            {deal.product_description ? (
-              <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
-                {deal.product_description}
-              </div>
-            ) : (
-              <div className="muted" style={{ marginTop: 10 }}>Sin descripción.</div>
-            )}
-          </div>
+        <div className="small">
+          ${deal.product_price_public} ·{" "}
+          {new Date(deal.created_at).toLocaleDateString()}
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          {deal.product_description}
         </div>
       </div>
     </main>
