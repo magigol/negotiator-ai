@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type DealRow = {
@@ -18,9 +18,12 @@ function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-export default function ShopItemPage({ params }: { params: { id: string } }) {
+export default function ShopItemPage() {
   const router = useRouter();
-  const dealId = params?.id; // <- importante
+  const params = useParams<{ id: string | string[] }>();
+
+  const dealIdRaw = params?.id;
+  const dealId = Array.isArray(dealIdRaw) ? dealIdRaw[0] : dealIdRaw;
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState<DealRow | null>(null);
@@ -37,7 +40,7 @@ export default function ShopItemPage({ params }: { params: { id: string } }) {
       setLoading(true);
       setErrorMsg(null);
 
-      if (!dealId || !isUuid(dealId)) {
+      if (!dealId || typeof dealId !== "string" || !isUuid(dealId)) {
         setErrorMsg("ID inválido.");
         setLoading(false);
         return;
