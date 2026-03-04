@@ -1,15 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-type ProposeReq = {
-  dealId: string;
-  sellerToken?: string; // el token de /deal/[token]
-};
-
 function assertEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
+}
+
+function isUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
 function clamp(n: number, lo: number, hi: number) {
@@ -34,7 +33,6 @@ async function callOpenAI({
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      // Pedimos salida de texto (pero en JSON)
       input,
     }),
   });
@@ -48,7 +46,6 @@ async function callOpenAI({
     throw new Error(msg);
   }
 
-  // Responses API suele exponer output_text
   const outputText: string =
     json?.output_text ||
     json?.output?.[0]?.content?.[0]?.text ||
@@ -60,22 +57,85 @@ async function callOpenAI({
 
 export async function POST(req: Request) {
   try {
-    const { dealId, sellerToken } = (await req.json()) as ProposeReq;
+    const body = await req.json().catch(() => ({}));
+
+    // acepta camelCase o snake_case
+    const dealId: string | undefined = body.dealId ?? body.deal_id;
+    const proposedPriceRaw = body.proposedPrice ?? body.proposed_price; // <- para tienda
+    const sellerToken: string | undefined = body.sellerToken ?? body.seller_token; // <- para vendedor/IA
 
     if (!dealId) {
       return NextResponse.json({ error: "dealId is required" }, { status: 400 });
     }
+    if (!isUuid(dealId)) {
+      return NextResponse.json({ error: "Invalid dealId" }, { status: 400 });
+    }
 
     const supabaseUrl = assertEnv("NEXT_PUBLIC_SUPABASE_URL");
     const serviceRole = assertEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const openaiKey = assertEnv("OPENAI_API_KEY");
 
-    // Admin client (bypassa RLS) para que el server pueda leer/escribir seguro
+    // Admin client (bypassa RLS) para escribir
     const admin = createClient(supabaseUrl, serviceRole, {
       auth: { persistSession: false },
     });
 
-    // 1) Validar sellerToken (recomendado)
+    // 1) Cargar deal (siempre)
+    const { data: deal, error: dealErr } = await admin
+      .from("deals")
+      .select("id,status,product_title,product_description,product_price_public,product_image_url")
+      .eq("id", dealId)
+      .maybeSingle();
+
+    if (dealErr) throw dealErr;
+    if (!deal) {
+      return NextResponse.json({ error: "Deal not found" }, { status: 404 });
+    }
+    if (deal.status !== "active") {
+      return NextResponse.json({ error: "Deal is not active" }, { status: 400 });
+    }
+
+    // =========================
+    // MODO A) TIENDA (buyer propone precio)
+    // Si viene proposedPrice => guardamos offer y message
+    // =========================
+    if (proposedPriceRaw !== undefined && proposedPriceRaw !== null && proposedPriceRaw !== "") {
+      const proposedPrice = Number(proposedPriceRaw);
+
+      if (!Number.isFinite(proposedPrice) || proposedPrice <= 0) {
+        return NextResponse.json({ error: "proposedPrice must be a positive number" }, { status: 400 });
+      }
+
+      // Insert en offers (según tu schema real: proposed_price, rationale, etc.)
+      const { error: offerErr } = await admin.from("offers").insert({
+        deal_id: dealId,
+        proposed_price: proposedPrice,
+        rationale: "Oferta del comprador desde la tienda",
+        buyer_status: "submitted", // puedes cambiarlo a lo que uses
+      } as any);
+
+      if (offerErr) throw offerErr;
+
+      // Insert en messages (según tu schema: sender_role)
+      const { error: msgErr } = await admin.from("messages").insert({
+        deal_id: dealId,
+        sender_role: "buyer",
+        content: `Oferta del comprador: $${proposedPrice}`,
+      } as any);
+
+      if (msgErr) throw msgErr;
+
+      return NextResponse.json({
+        ok: true,
+        mode: "buyer_offer",
+        dealId,
+        proposed_price: proposedPrice,
+      });
+    }
+
+    // =========================
+    // MODO B) VENDEDOR/IA (tu flujo actual)
+    // =========================
+    // Validar sellerToken (si viene)
     if (sellerToken) {
       const { data: part, error: partErr } = await admin
         .from("deal_participants")
@@ -93,15 +153,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 2) Cargar deal + terms
-    const { data: deal, error: dealErr } = await admin
-      .from("deals")
-      .select(
-        "id,status,product_title,product_description,product_price_public,product_image_url"
-      )
-      .eq("id", dealId)
-      .single();
-    if (dealErr) throw dealErr;
+    const openaiKey = assertEnv("OPENAI_API_KEY");
 
     const { data: terms, error: termsErr } = await admin
       .from("deal_terms")
@@ -126,7 +178,6 @@ export async function POST(req: Request) {
     const buyerMax = Number(terms.buyer_max ?? 0);
     const buyerInitial = Number(terms.buyer_initial_offer ?? 0);
 
-    // Si el buyer todavía no llenó términos, no hay con qué negociar
     if (!buyerMax || !buyerInitial) {
       return NextResponse.json(
         { error: "Buyer terms are missing (buyer_max / buyer_initial_offer)" },
@@ -134,24 +185,18 @@ export async function POST(req: Request) {
       );
     }
 
-    // 3) Heurística base (si el modelo se cae, igual devolvemos algo)
-    // Si no hay cruce, sugerimos contra-oferta en el mínimo del vendedor.
     const hasOverlap = buyerMax >= sellerMinCurrent;
     const mid = (buyerMax + sellerMinCurrent) / 2;
-    const suggested = hasOverlap
-      ? Math.round(mid) // redondeo simple
-      : Math.round(sellerMinCurrent);
+    const suggested = hasOverlap ? Math.round(mid) : Math.round(sellerMinCurrent);
 
-    const offerFloor = hasOverlap ? sellerMinCurrent : sellerMinCurrent;
+    const offerFloor = sellerMinCurrent;
     const offerCeil = hasOverlap ? buyerMax : sellerMinCurrent;
 
     const offerCandidate = clamp(suggested, offerFloor, offerCeil);
 
-    // 4) Llamada a OpenAI (devuelve JSON)
-    const model = "gpt-5.1-mini"; // buen balance costo/latencia
+    const model = "gpt-5.1-mini";
     const system = `
-Eres un negociador experto. Tu objetivo es proponer un acuerdo que maximice la probabilidad de cierre y deje a ambas partes "conformes".
-Devuelve SIEMPRE un JSON válido con esta forma:
+Eres un negociador experto. Devuelve SIEMPRE un JSON válido:
 
 {
   "offer_price": number,
@@ -161,10 +206,10 @@ Devuelve SIEMPRE un JSON válido con esta forma:
 }
 
 Reglas:
-- offer_price debe estar entre seller_min_current y buyer_max cuando exista cruce.
-- Si buyer_max < seller_min_current, offer_price debe ser seller_min_current (explica que no hay cruce y por qué).
-- Mensajes cortos, convincentes, sin revelar información interna (no digas "buyer_max" ni "seller_min").
-- Usa moneda "$" en los mensajes.
+- offer_price entre seller_min_current y buyer_max cuando exista cruce.
+- Si buyer_max < seller_min_current, offer_price debe ser seller_min_current.
+- Mensajes cortos y convincentes, sin revelar variables internas.
+- Usa "$" en los mensajes.
 `.trim();
 
     const user = {
@@ -182,9 +227,7 @@ Reglas:
         buyer_initial_offer: buyerInitial,
         buyer_urgency: terms.buyer_urgency,
       },
-      hint: {
-        heuristic_offer_price: offerCandidate,
-      },
+      hint: { heuristic_offer_price: offerCandidate },
     };
 
     const outputText = await callOpenAI({
@@ -206,47 +249,37 @@ Reglas:
     try {
       proposal = JSON.parse(outputText);
     } catch {
-      // Fallback si el modelo devolvió texto raro
       proposal = {
         offer_price: offerCandidate,
         rationale:
           "Propuesta heurística: punto medio entre el mínimo actual del vendedor y el máximo del comprador (o mínimo actual si no hay cruce).",
-        seller_message: `Propongo cerrar en $${offerCandidate}. Es un punto equilibrado que aumenta la probabilidad de venta sin regalar margen.`,
-        buyer_message: `Podemos cerrar en $${offerCandidate}. Es un trato justo considerando el precio publicado y el estado del producto.`,
+        seller_message: `Propongo cerrar en $${offerCandidate}.`,
+        buyer_message: `Podemos cerrar en $${offerCandidate}.`,
       };
     }
 
-    // Normalizar offer_price dentro de rango seguro
-    if (hasOverlap) {
-      proposal.offer_price = clamp(
-        Number(proposal.offer_price),
-        sellerMinCurrent,
-        buyerMax
-      );
-    } else {
-      proposal.offer_price = sellerMinCurrent;
-    }
+    proposal.offer_price = hasOverlap
+      ? clamp(Number(proposal.offer_price), sellerMinCurrent, buyerMax)
+      : sellerMinCurrent;
 
-    // 5) (Opcional) Guardar en offers/messages si existen columnas compatibles
-    // Si tus columnas no coinciden, esto no debería romper el endpoint.
+    // Guardar AI offer en offers (con tu schema real)
     try {
       await admin.from("offers").insert({
         deal_id: dealId,
-        // Si tu tabla tiene otros nombres, cámbialos aquí:
-        amount: proposal.offer_price,
-        side: "ai",
-        summary: proposal.rationale,
-        status: "proposed",
+        proposed_price: proposal.offer_price,
+        rationale: proposal.rationale,
+        seller_status: "ai_proposed",
       } as any);
     } catch {
       // ignore
     }
 
+    // Guardar message (schema real)
     try {
       await admin.from("messages").insert({
         deal_id: dealId,
-        role: "ai",
-        content: `Propuesta: $${proposal.offer_price}\n\n${proposal.rationale}`,
+        sender_role: "ai",
+        content: `Propuesta IA: $${proposal.offer_price}\n\n${proposal.rationale}`,
       } as any);
     } catch {
       // ignore
@@ -254,14 +287,10 @@ Reglas:
 
     return NextResponse.json({
       ok: true,
+      mode: "ai_proposal",
       dealId,
       proposal,
-      meta: {
-        hasOverlap,
-        sellerMinCurrent,
-        buyerMax,
-        heuristicOffer: offerCandidate,
-      },
+      meta: { hasOverlap, sellerMinCurrent, buyerMax, heuristicOffer: offerCandidate },
     });
   } catch (e: any) {
     console.error(e);
