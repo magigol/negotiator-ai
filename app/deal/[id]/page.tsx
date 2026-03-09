@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 
 type DealRow = {
   id: string;
@@ -44,9 +44,72 @@ function money(n: number | null | undefined) {
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
-export default function DealSellerPage({ params }: { params: { id: string } }) {
+function getOfferRank(
+  proposedPrice: number | null | undefined,
+  sellerMinCurrent: number | null | undefined
+) {
+  if (!proposedPrice || !sellerMinCurrent) {
+    return { label: "Sin evaluar", color: "rgba(255,255,255,.18)" };
+  }
+
+  const ratio = proposedPrice / sellerMinCurrent;
+
+  if (ratio >= 1.08) {
+    return { label: "🔥 Excelente", color: "rgba(34,197,94,.22)" };
+  }
+
+  if (ratio >= 1.0) {
+    return { label: "🟢 Buena", color: "rgba(59,130,246,.22)" };
+  }
+
+  if (ratio >= 0.92) {
+    return { label: "🟡 Media", color: "rgba(234,179,8,.22)" };
+  }
+
+  return { label: "🔴 Baja", color: "rgba(239,68,68,.22)" };
+}
+
+function getCloseProbability({
+  proposedPrice,
+  sellerMinCurrent,
+  sellerUrgency,
+  buyerUrgency,
+}: {
+  proposedPrice: number | null | undefined;
+  sellerMinCurrent: number | null | undefined;
+  sellerUrgency: string | null | undefined;
+  buyerUrgency: string | null | undefined;
+}) {
+  if (!proposedPrice || !sellerMinCurrent) return 0;
+
+  let score = 0;
+  const ratio = proposedPrice / sellerMinCurrent;
+
+  if (ratio >= 1.1) score += 55;
+  else if (ratio >= 1.0) score += 40;
+  else if (ratio >= 0.95) score += 25;
+  else score += 10;
+
+  if (sellerUrgency === "high") score += 15;
+  else if (sellerUrgency === "medium") score += 8;
+
+  if (buyerUrgency === "high") score += 15;
+  else if (buyerUrgency === "medium") score += 8;
+
+  return Math.min(score, 95);
+}
+
+function isUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v
+  );
+}
+
+export default function DealSellerPage() {
   const router = useRouter();
-  const dealId = params?.id;
+  const params = useParams<{ id: string | string[] }>();
+  const dealIdRaw = params?.id;
+  const dealId = Array.isArray(dealIdRaw) ? dealIdRaw[0] : dealIdRaw;
 
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState<DealRow | null>(null);
@@ -57,7 +120,6 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
   const [actingOfferId, setActingOfferId] = useState<string | null>(null);
 
   const bestOffer = useMemo(() => {
-    // “mejor” = mayor precio
     return [...offers]
       .filter((o) => typeof o.proposed_price === "number")
       .sort((a, b) => Number(b.proposed_price) - Number(a.proposed_price))[0];
@@ -68,13 +130,18 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
     setErrorMsg(null);
     setActionMsg(null);
 
+    if (!dealId || typeof dealId !== "string" || !isUuid(dealId)) {
+      setErrorMsg("ID inválido.");
+      setLoading(false);
+      return;
+    }
+
     const { data: auth } = await supabase.auth.getUser();
     if (!auth?.user) {
       router.push("/login");
       return;
     }
 
-    // 1) Deal
     const { data: dealData, error: dealErr } = await supabase
       .from("deals")
       .select(
@@ -89,7 +156,6 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
       return;
     }
 
-    // Solo dueño
     if (dealData.owner_user_id && dealData.owner_user_id !== auth.user.id) {
       setErrorMsg("No tienes permiso para ver este deal.");
       setLoading(false);
@@ -98,7 +164,6 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
 
     setDeal(dealData as DealRow);
 
-    // 2) Terms (puede no existir si falló al crear)
     const { data: termsData } = await supabase
       .from("deal_terms")
       .select(
@@ -109,7 +174,6 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
 
     setTerms((termsData ?? null) as DealTermsRow | null);
 
-    // 3) Offers
     const { data: offersData, error: offersErr } = await supabase
       .from("offers")
       .select(
@@ -130,16 +194,15 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
   useEffect(() => {
     if (!dealId) return;
     loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dealId]);
 
   async function decideOffer(offerId: string, decision: "accept" | "reject") {
+    if (!dealId) return;
+
     setActingOfferId(offerId);
     setActionMsg(null);
 
     try {
-      // Ajusta esto a como quieras registrar estado.
-      // En tu tabla ya existe seller_decision y seller_status.
       const patch: Partial<OfferRow> = {
         seller_decision: decision,
         seller_status: decision,
@@ -148,7 +211,14 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
       const { error } = await supabase.from("offers").update(patch).eq("id", offerId);
       if (error) throw error;
 
-      setActionMsg(decision === "accept" ? "✅ Oferta aceptada." : "🟠 Oferta rechazada.");
+      if (decision === "accept") {
+        await supabase.from("deals").update({ status: "closed" }).eq("id", dealId);
+      }
+
+      setActionMsg(
+        decision === "accept" ? "✅ Oferta aceptada y deal cerrado." : "🟠 Oferta rechazada."
+      );
+
       await loadAll();
     } catch (e: any) {
       setActionMsg(`❌ ${e?.message ?? "No se pudo actualizar la oferta."}`);
@@ -189,7 +259,6 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
-      {/* Producto */}
       <div className="card" style={{ marginTop: 12 }}>
         <div className="productCard">
           {deal.product_image_url ? (
@@ -219,7 +288,6 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
-      {/* Terms (vendedor) */}
       <div className="card" style={{ marginTop: 12 }}>
         <div style={{ fontWeight: 800, marginBottom: 10 }}>Términos del deal</div>
         {!terms ? (
@@ -265,7 +333,18 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
         )}
       </div>
 
-      {/* Offers */}
+      {bestOffer ? (
+        <div className="card" style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>Mejor oferta actual</div>
+          <div style={{ fontSize: 28, fontWeight: 900 }}>
+            {money(bestOffer.proposed_price)}
+          </div>
+          <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+            {bestOffer.rationale ?? "Sin justificación"}
+          </div>
+        </div>
+      ) : null}
+
       <div className="card" style={{ marginTop: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
           <div style={{ fontWeight: 800 }}>Ofertas recibidas</div>
@@ -289,6 +368,16 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
             offers.map((o) => {
               const pending =
                 !o.seller_decision || o.seller_decision === "pending" || o.seller_status === "pending";
+
+              const rank = getOfferRank(o.proposed_price, terms?.seller_min_current);
+
+              const closeProbability = getCloseProbability({
+                proposedPrice: o.proposed_price,
+                sellerMinCurrent: terms?.seller_min_current,
+                sellerUrgency: terms?.seller_urgency,
+                buyerUrgency: terms?.buyer_urgency,
+              });
+
               return (
                 <div key={o.id} className="card" style={{ padding: 14 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
@@ -296,14 +385,53 @@ export default function DealSellerPage({ params }: { params: { id: string } }) {
                       <div style={{ fontWeight: 800, fontSize: 16 }}>
                         Oferta: {money(o.proposed_price)}
                       </div>
-                      <div className="small" style={{ marginTop: 4, opacity: 0.8 }}>
-                        {o.created_at ? new Date(o.created_at).toLocaleString() : "—"} · Offer ID: {o.id}
+
+                      <div
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          background: rank.color,
+                          fontSize: 12,
+                          fontWeight: 800,
+                          marginTop: 8,
+                          display: "inline-block",
+                        }}
+                      >
+                        {rank.label}
                       </div>
+
                       {o.rationale ? (
                         <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
                           {o.rationale}
                         </div>
                       ) : null}
+
+                      <div style={{ marginTop: 10 }}>
+                        <div className="small" style={{ marginBottom: 4, opacity: 0.85 }}>
+                          Probabilidad de cierre: <b>{closeProbability}%</b>
+                        </div>
+                        <div
+                          style={{
+                            width: 180,
+                            height: 8,
+                            borderRadius: 999,
+                            background: "rgba(255,255,255,.08)",
+                            overflow: "hidden",
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${closeProbability}%`,
+                              height: "100%",
+                              background: "rgba(34,197,94,.85)",
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="small" style={{ marginTop: 8, opacity: 0.7 }}>
+                        {o.created_at ? new Date(o.created_at).toLocaleString() : "—"} · Offer ID: {o.id}
+                      </div>
                     </div>
 
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
