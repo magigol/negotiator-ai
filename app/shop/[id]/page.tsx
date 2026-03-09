@@ -22,6 +22,14 @@ type OfferRow = {
   created_at: string | null;
 };
 
+type MessageRow = {
+  id: string;
+  deal_id: string;
+  sender_role: string | null;
+  content: string | null;
+  created_at: string | null;
+};
+
 function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     v
@@ -43,6 +51,7 @@ export default function ShopItemPage() {
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState<DealRow | null>(null);
   const [offers, setOffers] = useState<OfferRow[]>([]);
+  const [messages, setMessages] = useState<MessageRow[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [offer, setOffer] = useState<string>("");
@@ -107,7 +116,7 @@ export default function ShopItemPage() {
     };
   }, [deal]);
 
-  async function reloadOffers(currentDealId: string) {
+  async function reloadOffersAndMessages(currentDealId: string) {
     const { data: offersData } = await supabase
       .from("offers")
       .select("id,deal_id,proposed_price,rationale,created_at")
@@ -115,6 +124,14 @@ export default function ShopItemPage() {
       .order("created_at", { ascending: false });
 
     setOffers((offersData ?? []) as OfferRow[]);
+
+    const { data: messagesData } = await supabase
+      .from("messages")
+      .select("id,deal_id,sender_role,content,created_at")
+      .eq("deal_id", currentDealId)
+      .order("created_at", { ascending: true });
+
+    setMessages((messagesData ?? []) as MessageRow[]);
   }
 
   useEffect(() => {
@@ -144,13 +161,7 @@ export default function ShopItemPage() {
 
       setDeal(data as DealRow);
 
-      const { data: offersData } = await supabase
-        .from("offers")
-        .select("id,deal_id,proposed_price,rationale,created_at")
-        .eq("deal_id", dealId)
-        .order("created_at", { ascending: false });
-
-      setOffers((offersData ?? []) as OfferRow[]);
+      await reloadOffersAndMessages(dealId);
       setLoading(false);
     })();
   }, [dealId]);
@@ -172,7 +183,7 @@ export default function ShopItemPage() {
     setToast(null);
 
     try {
-      const res = await fetch("/api/propose", {
+      const res = await fetch("/api/negotiate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -193,7 +204,20 @@ export default function ShopItemPage() {
       setOffer("");
       setShowOfferModal(false);
 
-      await reloadOffers(deal.id);
+      // refrescar estado del deal
+      const { data: updatedDeal } = await supabase
+        .from("deals")
+        .select(
+          "id,status,created_at,product_title,product_description,product_price_public,product_image_url"
+        )
+        .eq("id", deal.id)
+        .maybeSingle();
+
+      if (updatedDeal) {
+        setDeal(updatedDeal as DealRow);
+      }
+
+      await reloadOffersAndMessages(deal.id);
     } catch (e: any) {
       setToast(`❌ ${e?.message ?? "Error inesperado."}`);
     } finally {
@@ -406,7 +430,7 @@ export default function ShopItemPage() {
             <div className="small" style={{ opacity: 0.85, marginBottom: 12 }}>
               {deal.status === "closed"
                 ? "La negociación está cerrada porque el producto ya fue vendido."
-                : "Puedes enviar una propuesta de precio al vendedor."}
+                : "Puedes enviar una propuesta de precio al vendedor. La IA responderá con una contraoferta automática."}
             </div>
 
             <div className="btnRow">
@@ -426,6 +450,36 @@ export default function ShopItemPage() {
             ) : null}
           </div>
         </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Historial de negociación</div>
+
+        {messages.length === 0 ? (
+          <div className="muted">Aún no hay mensajes.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {messages.map((m) => (
+              <div
+                key={m.id}
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  background:
+                    m.sender_role === "ai"
+                      ? "rgba(59,130,246,.12)"
+                      : "rgba(255,255,255,.05)",
+                }}
+              >
+                <div className="small" style={{ opacity: 0.7 }}>
+                  {m.sender_role ?? "unknown"} ·{" "}
+                  {m.created_at ? new Date(m.created_at).toLocaleString() : "—"}
+                </div>
+                <div style={{ marginTop: 6 }}>{m.content ?? ""}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {showOfferModal && deal.status !== "closed" && (

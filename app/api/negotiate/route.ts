@@ -41,11 +41,7 @@ async function callOpenAI({
     throw new Error(msg);
   }
 
-  return (
-    json?.output_text ||
-    json?.output?.[0]?.content?.[0]?.text ||
-    ""
-  );
+  return json?.output_text || json?.output?.[0]?.content?.[0]?.text || "";
 }
 
 export async function POST(req: Request) {
@@ -121,62 +117,82 @@ export async function POST(req: Request) {
     const sellerMin = Number(terms.seller_min ?? 0);
     const sellerMinCurrent = Number(terms.seller_min_current ?? sellerMin);
 
-    // 3) Guardar oferta comprador
+    // 3) Última oferta previa para hacer la negociación más natural
+    const { data: lastOfferRow } = await admin
+      .from("offers")
+      .select("proposed_price, created_at")
+      .eq("deal_id", dealId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const lastOffer = Number(lastOfferRow?.proposed_price ?? 0);
+
+    // 4) Guardar la nueva oferta del comprador
     const { error: insertOfferErr } = await admin.from("offers").insert({
       deal_id: dealId,
       proposed_price: proposedPrice,
-      rationale: "Oferta enviada desde la tienda",
+      rationale: "Oferta enviada por comprador",
       buyer_status: "submitted",
       seller_status: "pending",
     } as any);
 
     if (insertOfferErr) throw insertOfferErr;
 
-    // 4) Guardar mensaje comprador
+    // 5) Guardar mensaje del comprador
     await admin.from("messages").insert({
       deal_id: dealId,
       sender_role: "buyer",
       content: `El comprador propone ${proposedPrice}.`,
     } as any);
 
-    // 5) Calcular contraoferta base
+    // 6) Calcular contraoferta base
+    // estrategia:
+    // - si la oferta supera el mínimo actual, el punto medio
+    // - si está por debajo, acercarse al mínimo
+    // - si ya había otra oferta, la IA se mueve menos bruscamente
     let counterPrice = proposedPrice;
 
     if (proposedPrice >= sellerMinCurrent) {
-      // Si supera el mínimo actual, empuja un poco hacia arriba
       counterPrice = Math.round((proposedPrice + sellerMinCurrent) / 2);
     } else {
-      // Si está bajo el mínimo, sugiere algo más cercano al mínimo
       counterPrice = Math.round((proposedPrice + sellerMinCurrent * 2) / 3);
     }
 
-    counterPrice = clamp(counterPrice, Math.min(proposedPrice, sellerMinCurrent), Math.max(proposedPrice, sellerMinCurrent));
+    if (lastOffer > 0) {
+      counterPrice = Math.round((counterPrice + lastOffer) / 2);
+    }
 
-    // 6) Mensaje IA con OpenAI
+    counterPrice = clamp(
+      counterPrice,
+      Math.min(proposedPrice, sellerMinCurrent),
+      Math.max(proposedPrice, sellerMinCurrent)
+    );
+
+    // 7) Mensaje IA
     let aiMessage = `Podemos continuar la negociación con una contraoferta de $${counterPrice}.`;
 
     try {
-      const prompt = [
-        {
-          role: "system",
-          content:
-            "Eres un negociador experto. Responde con una sola frase corta y convincente proponiendo una contraoferta en español.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            product: deal.product_title,
-            public_price: deal.product_price_public,
-            buyer_offer: proposedPrice,
-            seller_min_current: sellerMinCurrent,
-            suggested_counteroffer: counterPrice,
-          }),
-        },
-      ];
-
       const output = await callOpenAI({
         apiKey: openaiKey,
-        input: prompt,
+        input: [
+          {
+            role: "system",
+            content:
+              "Eres un negociador experto. Responde con una sola frase corta, natural y convincente en español proponiendo una contraoferta.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              product: deal.product_title,
+              public_price: deal.product_price_public,
+              buyer_offer: proposedPrice,
+              last_offer: lastOffer || null,
+              seller_min_current: sellerMinCurrent,
+              suggested_counteroffer: counterPrice,
+            }),
+          },
+        ],
       });
 
       if (output && output.trim()) {
@@ -186,21 +202,20 @@ export async function POST(req: Request) {
       // fallback silencioso
     }
 
-    // 7) Guardar mensaje IA
+    // 8) Guardar mensaje IA
     await admin.from("messages").insert({
       deal_id: dealId,
       sender_role: "ai",
       content: `Contraoferta sugerida: $${counterPrice}. ${aiMessage}`,
     } as any);
 
-    // 8) Marcar deal como negotiating si aún está activo
+    // 9) Marcar deal en negociación
     if (deal.status === "active") {
       await admin.from("deals").update({ status: "negotiating" }).eq("id", dealId);
     }
 
     return NextResponse.json({
       ok: true,
-      mode: "buyer_offer_with_counter",
       dealId,
       buyerOffer: proposedPrice,
       counterOffer: counterPrice,

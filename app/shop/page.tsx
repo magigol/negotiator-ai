@@ -21,6 +21,8 @@ type OfferRow = {
   created_at: string | null;
 };
 
+type StatusFilter = "all" | "active" | "negotiating" | "closed";
+
 function money(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
@@ -47,11 +49,33 @@ function getDemandBadge(offerCount: number) {
   };
 }
 
+function getStatusBadge(status: string) {
+  if (status === "closed") {
+    return {
+      label: "✅ Vendido",
+      bg: "rgba(34,197,94,.22)",
+    };
+  }
+
+  if (status === "negotiating") {
+    return {
+      label: "⏳ En negociación",
+      bg: "rgba(234,179,8,.22)",
+    };
+  }
+
+  return {
+    label: "🟢 Disponible",
+    bg: "rgba(59,130,246,.22)",
+  };
+}
+
 export default function ShopPage() {
   const [items, setItems] = useState<DealRow[]>([]);
   const [offers, setOffers] = useState<OfferRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   useEffect(() => {
     (async () => {
@@ -62,7 +86,7 @@ export default function ShopPage() {
         .select(
           "id,status,created_at,product_title,product_description,product_price_public,product_image_url"
         )
-        .eq("status", "active")
+        .in("status", ["active", "negotiating", "closed"])
         .order("created_at", { ascending: false });
 
       if (!dealsErr) {
@@ -85,14 +109,17 @@ export default function ShopPage() {
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
 
-    if (!q) return items;
-
     return items.filter((item) => {
       const title = item.product_title?.toLowerCase() ?? "";
       const desc = item.product_description?.toLowerCase() ?? "";
-      return title.includes(q) || desc.includes(q);
+
+      const matchesQuery = !q || title.includes(q) || desc.includes(q);
+      const matchesStatus =
+        statusFilter === "all" ? true : item.status === statusFilter;
+
+      return matchesQuery && matchesStatus;
     });
-  }, [items, query]);
+  }, [items, query, statusFilter]);
 
   const offerStatsByDeal = useMemo(() => {
     const stats = new Map<
@@ -148,7 +175,6 @@ export default function ShopPage() {
         </div>
       </div>
 
-      {/* Buscador */}
       <div className="card" style={{ marginTop: 12 }}>
         <div
           style={{
@@ -170,6 +196,43 @@ export default function ShopPage() {
           <div className="small" style={{ opacity: 0.8 }}>
             {filteredItems.length} producto{filteredItems.length !== 1 ? "s" : ""}
           </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            marginTop: 12,
+          }}
+        >
+          <button
+            className={statusFilter === "all" ? "btn" : "btnGhost"}
+            onClick={() => setStatusFilter("all")}
+          >
+            Todos
+          </button>
+
+          <button
+            className={statusFilter === "active" ? "btn" : "btnGhost"}
+            onClick={() => setStatusFilter("active")}
+          >
+            Disponibles
+          </button>
+
+          <button
+            className={statusFilter === "negotiating" ? "btn" : "btnGhost"}
+            onClick={() => setStatusFilter("negotiating")}
+          >
+            En negociación
+          </button>
+
+          <button
+            className={statusFilter === "closed" ? "btn" : "btnGhost"}
+            onClick={() => setStatusFilter("closed")}
+          >
+            Vendidos
+          </button>
         </div>
       </div>
 
@@ -193,6 +256,7 @@ export default function ShopPage() {
             };
 
             const demand = getDemandBadge(stats.count);
+            const statusBadge = getStatusBadge(d.status);
 
             return (
               <Link
@@ -229,18 +293,8 @@ export default function ShopPage() {
                     />
                   )}
 
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <div
-                      style={{
-                        fontWeight: 800,
-                        fontSize: 18,
-                        lineHeight: 1.2,
-                      }}
-                    >
-                      {d.product_title ?? "(sin título)"}
-                    </div>
-
-                    <span className="badge">{d.status}</span>
+                  <div style={{ fontWeight: 800, fontSize: 18, lineHeight: 1.2 }}>
+                    {d.product_title ?? "(sin título)"}
                   </div>
 
                   <div style={{ fontSize: 24, fontWeight: 900 }}>
@@ -254,6 +308,18 @@ export default function ShopPage() {
                       flexWrap: "wrap",
                     }}
                   >
+                    <div
+                      style={{
+                        padding: "7px 10px",
+                        borderRadius: 999,
+                        background: statusBadge.bg,
+                        fontWeight: 700,
+                        fontSize: 13,
+                      }}
+                    >
+                      {statusBadge.label}
+                    </div>
+
                     <div
                       style={{
                         padding: "7px 10px",
