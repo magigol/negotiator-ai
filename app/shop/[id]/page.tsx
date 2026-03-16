@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-type Deal = {
+type DealRow = {
   id: string;
   status: string;
   created_at: string;
@@ -14,231 +14,638 @@ type Deal = {
   product_image_url: string | null;
 };
 
-type Offer = {
+type OfferRow = {
+  id: string;
   deal_id: string;
   proposed_price: number | null;
+  rationale: string | null;
+  created_at: string | null;
 };
 
+type MessageRow = {
+  id: string;
+  deal_id: string;
+  sender_role: string | null;
+  content: string | null;
+  created_at: string | null;
+};
+
+function isUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v
+  );
+}
+
 function money(n: number | null | undefined) {
-  if (!n) return "—";
+  if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
-export default function ShopPage() {
-  const [deals, setDeals] = useState<Deal[]>([]);
-  const [offers, setOffers] = useState<Offer[]>([]);
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<
-    "all" | "available" | "negotiating" | "closed"
-  >("all");
+export default function ShopItemPage() {
+  const router = useRouter();
+  const params = useParams<{ id: string | string[] }>();
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const dealIdRaw = params?.id;
+  const dealId = Array.isArray(dealIdRaw) ? dealIdRaw[0] : dealIdRaw;
 
-  async function loadData() {
-    const { data: dealsData } = await supabase
+  const [loading, setLoading] = useState(true);
+  const [deal, setDeal] = useState<DealRow | null>(null);
+  const [offers, setOffers] = useState<OfferRow[]>([]);
+  const [messages, setMessages] = useState<MessageRow[]>([]);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [offer, setOffer] = useState<string>("");
+  const [sending, setSending] = useState(false);
+  const [acceptingCounter, setAcceptingCounter] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [showOfferModal, setShowOfferModal] = useState(false);
+
+  const offerNumber = useMemo(() => Number(offer), [offer]);
+
+  const bestOffer = useMemo(() => {
+    return [...offers]
+      .filter((o) => typeof o.proposed_price === "number")
+      .sort((a, b) => Number(b.proposed_price) - Number(a.proposed_price))[0];
+  }, [offers]);
+
+  const latestCounterOffer = useMemo(() => {
+    const aiMessages = [...messages]
+      .filter(
+        (m) => m.sender_role === "ai" && m.content?.startsWith("COUNTER_OFFER:")
+      )
+      .sort((a, b) => {
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return tb - ta;
+      });
+
+    const latest = aiMessages[0];
+    if (!latest?.content) return null;
+
+    const match = latest.content.match(/^COUNTER_OFFER:(\d+)/);
+    if (!match) return null;
+
+    return {
+      price: Number(match[1]),
+      fullContent: latest.content,
+      text: latest.content.replace(/^COUNTER_OFFER:\d+\n?/, "").trim(),
+    };
+  }, [messages]);
+
+  const demandBadge = useMemo(() => {
+    if (offers.length >= 3) {
+      return {
+        label: "🔥 Alta demanda",
+        bg: "rgba(239,68,68,.18)",
+      };
+    }
+
+    if (offers.length >= 1) {
+      return {
+        label: "🟡 Interés moderado",
+        bg: "rgba(234,179,8,.18)",
+      };
+    }
+
+    return {
+      label: "🟢 Sin ofertas aún",
+      bg: "rgba(34,197,94,.18)",
+    };
+  }, [offers.length]);
+
+  const statusBadge = useMemo(() => {
+    if (!deal) {
+      return {
+        label: "—",
+        bg: "rgba(255,255,255,.12)",
+      };
+    }
+
+    if (deal.status === "closed") {
+      return {
+        label: "✅ Vendido",
+        bg: "rgba(34,197,94,.22)",
+      };
+    }
+
+    if (deal.status === "negotiating") {
+      return {
+        label: "⏳ En negociación",
+        bg: "rgba(234,179,8,.22)",
+      };
+    }
+
+    return {
+      label: "🟢 Disponible",
+      bg: "rgba(59,130,246,.22)",
+    };
+  }, [deal]);
+
+  async function reloadEverything(currentDealId: string) {
+    const { data: updatedDeal } = await supabase
       .from("deals")
       .select(
         "id,status,created_at,product_title,product_description,product_price_public,product_image_url"
       )
-      .in("status", ["active", "negotiating", "closed"])
-      .order("created_at", { ascending: false });
+      .eq("id", currentDealId)
+      .maybeSingle();
+
+    if (updatedDeal) {
+      setDeal(updatedDeal as DealRow);
+    }
 
     const { data: offersData } = await supabase
       .from("offers")
-      .select("deal_id,proposed_price");
+      .select("id,deal_id,proposed_price,rationale,created_at")
+      .eq("deal_id", currentDealId)
+      .order("created_at", { ascending: false });
 
-    setDeals((dealsData ?? []) as Deal[]);
-    setOffers((offersData ?? []) as Offer[]);
+    setOffers((offersData ?? []) as OfferRow[]);
+
+    const { data: messagesData } = await supabase
+      .from("messages")
+      .select("id,deal_id,sender_role,content,created_at")
+      .eq("deal_id", currentDealId)
+      .order("created_at", { ascending: true });
+
+    setMessages((messagesData ?? []) as MessageRow[]);
   }
 
-  const offerStats = useMemo(() => {
-    const map = new Map<string, { count: number; best: number | null }>();
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      setErrorMsg(null);
 
-    for (const o of offers) {
-      const s = map.get(o.deal_id) ?? { count: 0, best: null };
-
-      s.count++;
-
-      if (
-        typeof o.proposed_price === "number" &&
-        (s.best === null || o.proposed_price > s.best)
-      ) {
-        s.best = o.proposed_price;
+      if (!dealId || typeof dealId !== "string" || !isUuid(dealId)) {
+        setErrorMsg("ID inválido.");
+        setLoading(false);
+        return;
       }
 
-      map.set(o.deal_id, s);
+      const { data, error } = await supabase
+        .from("deals")
+        .select(
+          "id,status,created_at,product_title,product_description,product_price_public,product_image_url"
+        )
+        .eq("id", dealId)
+        .maybeSingle();
+
+      if (error || !data) {
+        setErrorMsg(error?.message ?? "Producto no encontrado.");
+        setLoading(false);
+        return;
+      }
+
+      // Solo bloquear si está cerrado
+      if (data.status === "closed") {
+        setDeal(data as DealRow);
+        await reloadEverything(dealId);
+        setLoading(false);
+        return;
+      }
+
+      await reloadEverything(dealId);
+      setLoading(false);
+    })();
+  }, [dealId]);
+
+  async function proposePrice() {
+    if (!deal) return;
+
+    if (deal.status === "closed") {
+      setToast("Este producto ya fue vendido.");
+      return;
     }
 
-    return map;
-  }, [offers]);
-
-  const filteredDeals = useMemo(() => {
-    let list = deals;
-
-    if (filter === "available") {
-      list = list.filter((d) => d.status === "active");
+    if (!Number.isFinite(offerNumber) || offerNumber <= 0) {
+      setToast("Ingresa un precio válido.");
+      return;
     }
 
-    if (filter === "negotiating") {
-      list = list.filter((d) => d.status === "negotiating");
+    setSending(true);
+    setToast(null);
+
+    try {
+      const res = await fetch("/api/negotiate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          dealId: deal.id,
+          proposedPrice: offerNumber,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(json?.error ?? "No se pudo enviar la propuesta.");
+      }
+
+      setToast("✅ Propuesta enviada.");
+      setOffer("");
+      setShowOfferModal(false);
+
+      await reloadEverything(deal.id);
+    } catch (e: any) {
+      setToast(`❌ ${e?.message ?? "Error inesperado."}`);
+    } finally {
+      setSending(false);
     }
+  }
 
-    if (filter === "closed") {
-      list = list.filter((d) => d.status === "closed");
+  async function acceptCounterOffer() {
+    if (!deal || !latestCounterOffer) return;
+
+    setAcceptingCounter(true);
+    setToast(null);
+
+    try {
+      const res = await fetch("/api/accept-counteroffer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          dealId: deal.id,
+          acceptedPrice: latestCounterOffer.price,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(json?.error ?? "No se pudo aceptar la contraoferta.");
+      }
+
+      setToast(`✅ Contraoferta aceptada en ${money(latestCounterOffer.price)}.`);
+      await reloadEverything(deal.id);
+    } catch (e: any) {
+      setToast(`❌ ${e?.message ?? "Error inesperado."}`);
+    } finally {
+      setAcceptingCounter(false);
     }
+  }
 
-    if (search.trim()) {
-      const s = search.toLowerCase();
+  if (loading) {
+    return <main className="container">Cargando…</main>;
+  }
 
-      list = list.filter(
-        (d) =>
-          d.product_title?.toLowerCase().includes(s) ||
-          d.product_description?.toLowerCase().includes(s)
-      );
-    }
+  if (errorMsg) {
+    return (
+      <main className="container">
+        <div className="header">
+          <div>
+            <h1 className="h1">Producto</h1>
+            <div className="sub">{errorMsg}</div>
+          </div>
+          <div className="btnRow">
+            <button className="btnGhost" onClick={() => router.push("/shop")}>
+              Volver
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
-    return list;
-  }, [deals, search, filter]);
+  if (!deal) return null;
 
   return (
     <main className="container">
       <div className="header">
         <div>
-          <h1 className="h1">Tienda</h1>
-          <div className="sub">
-            Explora productos publicados y negocia precios.
+          <h1 className="h1">Detalle del producto</h1>
+          <div className="sub">ID: {deal.id}</div>
+        </div>
+        <div className="btnRow">
+          <button className="btnGhost" onClick={() => router.push("/shop")}>
+            Volver a la tienda
+          </button>
+        </div>
+      </div>
+
+      <div
+        className="card"
+        style={{
+          marginTop: 12,
+          display: "grid",
+          gridTemplateColumns: "minmax(280px, 420px) 1fr",
+          gap: 24,
+          alignItems: "start",
+        }}
+      >
+        <div>
+          {deal.product_image_url ? (
+            <img
+              src={deal.product_image_url}
+              alt={deal.product_title ?? "Producto"}
+              style={{
+                width: "100%",
+                height: 420,
+                objectFit: "cover",
+                borderRadius: 18,
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: "100%",
+                height: 420,
+                borderRadius: 18,
+                background: "rgba(255,255,255,.06)",
+              }}
+            />
+          )}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <div
+                style={{
+                  fontWeight: 900,
+                  fontSize: 28,
+                  lineHeight: 1.15,
+                }}
+              >
+                {deal.product_title ?? "(sin título)"}
+              </div>
+
+              <div className="small" style={{ marginTop: 8, opacity: 0.75 }}>
+                Publicado: {new Date(deal.created_at).toLocaleDateString("es-CL")}
+              </div>
+            </div>
+
+            <span
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: statusBadge.bg,
+                fontWeight: 800,
+                fontSize: 14,
+                height: "fit-content",
+              }}
+            >
+              {statusBadge.label}
+            </span>
+          </div>
+
+          <div
+            style={{
+              fontSize: 34,
+              fontWeight: 900,
+              marginTop: 6,
+            }}
+          >
+            {money(deal.product_price_public)}
+          </div>
+
+          {deal.status === "closed" && (
+            <div
+              style={{
+                padding: 14,
+                borderRadius: 14,
+                background: "rgba(34,197,94,.12)",
+                fontWeight: 700,
+                marginTop: 4,
+              }}
+            >
+              Este producto ya fue vendido.
+            </div>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              marginTop: 4,
+            }}
+          >
+            <div
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: demandBadge.bg,
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              {demandBadge.label}
+            </div>
+
+            <div
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: "rgba(255,255,255,.08)",
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              {offers.length} oferta{offers.length !== 1 ? "s" : ""}
+            </div>
+          </div>
+
+          {bestOffer ? (
+            <div
+              style={{
+                padding: 14,
+                borderRadius: 16,
+                background: "rgba(34,197,94,.10)",
+              }}
+            >
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Mejor oferta actual</div>
+              <div style={{ fontSize: 26, fontWeight: 900 }}>
+                {money(bestOffer.proposed_price)}
+              </div>
+              {bestOffer.rationale ? (
+                <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+                  {bestOffer.rationale}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {latestCounterOffer && deal.status !== "closed" ? (
+            <div
+              style={{
+                padding: 14,
+                borderRadius: 16,
+                background: "rgba(59,130,246,.10)",
+              }}
+            >
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Contraoferta IA</div>
+              <div style={{ fontSize: 26, fontWeight: 900 }}>
+                {money(latestCounterOffer.price)}
+              </div>
+              {latestCounterOffer.text ? (
+                <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+                  {latestCounterOffer.text}
+                </div>
+              ) : null}
+
+              <div className="btnRow" style={{ marginTop: 12 }}>
+                <button
+                  className="btn"
+                  disabled={acceptingCounter}
+                  onClick={acceptCounterOffer}
+                >
+                  {acceptingCounter ? "Aceptando…" : "Aceptar contraoferta IA"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          <div
+            style={{
+              padding: 14,
+              borderRadius: 16,
+              background: "rgba(255,255,255,.04)",
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Descripción</div>
+            <div className="small" style={{ opacity: 0.9, lineHeight: 1.6 }}>
+              {deal.product_description ?? "Sin descripción."}
+            </div>
+          </div>
+
+          <div
+            style={{
+              padding: 14,
+              borderRadius: 16,
+              background: "rgba(255,255,255,.04)",
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 8 }}>Negociación</div>
+            <div className="small" style={{ opacity: 0.85, marginBottom: 12 }}>
+              {deal.status === "closed"
+                ? "La negociación está cerrada porque el producto ya fue vendido."
+                : "Puedes enviar una propuesta de precio al vendedor. La IA responderá con una contraoferta automática."}
+            </div>
+
+            <div className="btnRow">
+              <button
+                className="btn"
+                disabled={deal.status === "closed"}
+                onClick={() => setShowOfferModal(true)}
+              >
+                {deal.status === "closed" ? "Producto vendido" : "Proponer precio"}
+              </button>
+            </div>
+
+            {toast ? (
+              <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
+                {toast}
+              </div>
+            ) : null}
           </div>
         </div>
-
-        <div className="btnRow">
-          <Link className="btnGhost" href="/">
-            Inicio
-          </Link>
-          <Link className="btn" href="/create">
-            Publicar
-          </Link>
-        </div>
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <div
-          style={{
-            display: "flex",
-            gap: 10,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <input
-            className="input"
-            placeholder="Buscar por nombre o descripción..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ flex: 1 }}
-          />
+      <div className="card" style={{ marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 10 }}>Historial de negociación</div>
 
-          <div className="small">{filteredDeals.length} productos</div>
-        </div>
+        {messages.length === 0 ? (
+          <div className="muted">Aún no hay mensajes.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {messages.map((m) => {
+              const cleanContent =
+                m.sender_role === "ai"
+                  ? (m.content ?? "").replace(/^COUNTER_OFFER:\d+\n?/, "")
+                  : m.content ?? "";
 
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <button className="btnGhost" onClick={() => setFilter("all")}>
-            Todos
-          </button>
-
-          <button className="btnGhost" onClick={() => setFilter("available")}>
-            Disponibles
-          </button>
-
-          <button className="btnGhost" onClick={() => setFilter("negotiating")}>
-            En negociación
-          </button>
-
-          <button className="btnGhost" onClick={() => setFilter("closed")}>
-            Vendidos
-          </button>
-        </div>
-      </div>
-
-      {filteredDeals.length === 0 ? (
-        <div className="card" style={{ marginTop: 16 }}>
-          No hay productos que coincidan con tu búsqueda.
-        </div>
-      ) : (
-        <div
-          style={{
-            marginTop: 16,
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))",
-            gap: 16,
-          }}
-        >
-          {filteredDeals.map((d) => {
-            const stats = offerStats.get(d.id) ?? {
-              count: 0,
-              best: null,
-            };
-
-            return (
-              <div key={d.id} className="card">
-                {d.product_image_url ? (
-                  <img
-                    src={d.product_image_url}
-                    style={{
-                      width: "100%",
-                      height: 200,
-                      objectFit: "cover",
-                      borderRadius: 12,
-                    }}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: "100%",
-                      height: 200,
-                      borderRadius: 12,
-                      background: "rgba(255,255,255,.06)",
-                    }}
-                  />
-                )}
-
-                <div style={{ marginTop: 10, fontWeight: 800 }}>
-                  {d.product_title}
-                </div>
-
-                <div style={{ fontSize: 22, fontWeight: 900 }}>
-                  {money(d.product_price_public)}
-                </div>
-
-                <div style={{ marginTop: 6 }}>
-                  {d.status === "active" && (
-                    <span className="badge">🟢 Disponible</span>
-                  )}
-
-                  {d.status === "negotiating" && (
-                    <span className="badge">🟡 En negociación</span>
-                  )}
-
-                  {d.status === "closed" && (
-                    <span className="badge">🔴 Vendido</span>
-                  )}
-                </div>
-
-                <div className="small" style={{ marginTop: 6 }}>
-                  {stats.count} ofertas
-                </div>
-
-                <Link
-                  href={`/shop/${d.id}`}
-                  className="btnGhost"
-                  style={{ marginTop: 10 }}
+              return (
+                <div
+                  key={m.id}
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    background:
+                      m.sender_role === "ai"
+                        ? "rgba(59,130,246,.12)"
+                        : "rgba(255,255,255,.05)",
+                  }}
                 >
-                  Ver producto
-                </Link>
-              </div>
-            );
-          })}
+                  <div className="small" style={{ opacity: 0.7 }}>
+                    {m.sender_role ?? "unknown"} ·{" "}
+                    {m.created_at ? new Date(m.created_at).toLocaleString() : "—"}
+                  </div>
+                  <div style={{ marginTop: 6 }}>{cleanContent}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {showOfferModal && deal.status !== "closed" && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 16,
+          }}
+          onClick={() => {
+            if (!sending) setShowOfferModal(false);
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: "100%",
+              maxWidth: 520,
+              padding: 20,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 900, fontSize: 22 }}>Proponer precio</div>
+            <div className="small" style={{ marginTop: 6, opacity: 0.8 }}>
+              Producto: {deal.product_title ?? "(sin título)"}
+            </div>
+
+            <div style={{ marginTop: 18 }}>
+              <label className="small">Tu oferta</label>
+              <input
+                className="input"
+                type="number"
+                value={offer}
+                onChange={(e) => setOffer(e.target.value)}
+                placeholder="Ej: 35000"
+                inputMode="numeric"
+                style={{ marginTop: 8 }}
+              />
+            </div>
+
+            <div
+              style={{
+                marginTop: 18,
+                display: "flex",
+                gap: 10,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                className="btnGhost"
+                disabled={sending}
+                onClick={() => setShowOfferModal(false)}
+              >
+                Cancelar
+              </button>
+
+              <button className="btn" disabled={sending} onClick={proposePrice}>
+                {sending ? "Enviando…" : "Enviar propuesta"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>
