@@ -4,35 +4,38 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter, useParams } from "next/navigation";
 
-type DealRow = {
+type Deal = {
   id: string;
   status: string;
-  created_at: string;
   product_title: string | null;
   product_description: string | null;
   product_price_public: number | null;
   product_image_url: string | null;
-  owner_user_id: string | null;
 };
 
-type DealTermsRow = {
-  deal_id: string;
+type DealTerms = {
   seller_min_current: number | null;
   seller_urgency: string | null;
   buyer_urgency: string | null;
 };
 
-type OfferRow = {
+type Offer = {
   id: string;
-  deal_id: string;
   proposed_price: number | null;
   rationale: string | null;
   seller_decision: string | null;
   created_at: string | null;
 };
 
+type Message = {
+  id: string;
+  sender_role: string | null;
+  content: string | null;
+  created_at: string | null;
+};
+
 function money(n: number | null | undefined) {
-  if (!n) return "—";
+  if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
@@ -98,12 +101,12 @@ function getAIRecommendation(best: number | null, min: number | null) {
 export default function DealSellerPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
-
   const dealId = params?.id;
 
-  const [deal, setDeal] = useState<DealRow | null>(null);
-  const [terms, setTerms] = useState<DealTermsRow | null>(null);
-  const [offers, setOffers] = useState<OfferRow[]>([]);
+  const [deal, setDeal] = useState<Deal | null>(null);
+  const [terms, setTerms] = useState<DealTerms | null>(null);
+  const [offers, setOffers] = useState<Offer[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [showHistory, setShowHistory] = useState(false);
 
   async function loadData() {
@@ -130,6 +133,14 @@ export default function DealSellerPage() {
       .order("created_at", { ascending: false });
 
     setOffers(offersData ?? []);
+
+    const { data: messagesData } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("deal_id", dealId)
+      .order("created_at", { ascending: true });
+
+    setMessages(messagesData ?? []);
   }
 
   useEffect(() => {
@@ -143,7 +154,6 @@ export default function DealSellerPage() {
   }, [offers]);
 
   const pendingOffers = offers.filter((o) => !o.seller_decision);
-
   const displayedOffers = showHistory ? offers : pendingOffers;
 
   const aiRecommendation = getAIRecommendation(
@@ -151,15 +161,38 @@ export default function DealSellerPage() {
     terms?.seller_min_current ?? null
   );
 
+  const closingMessage = useMemo(() => {
+    return [...messages]
+      .reverse()
+      .find(
+        (m) =>
+          m.content?.includes("Trato cerrado en $") ||
+          m.content?.includes("aceptó la contraoferta")
+      );
+  }, [messages]);
+
+  const finalClosedPrice = useMemo(() => {
+    if (!closingMessage?.content) return null;
+
+    const match = closingMessage.content.match(/\$(\d[\d.]*)/);
+    if (!match) return null;
+
+    const normalized = match[1].replace(/\./g, "");
+    const parsed = Number(normalized);
+
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [closingMessage]);
+
   async function decideOffer(id: string, decision: "accept" | "reject") {
-    await supabase.from("offers").update({
-      seller_decision: decision
-    }).eq("id", id);
+    await supabase
+      .from("offers")
+      .update({
+        seller_decision: decision,
+      })
+      .eq("id", id);
 
     if (decision === "accept") {
-      await supabase.from("deals")
-        .update({ status: "closed" })
-        .eq("id", dealId);
+      await supabase.from("deals").update({ status: "closed" }).eq("id", dealId);
     }
 
     loadData();
@@ -169,11 +202,9 @@ export default function DealSellerPage() {
 
   return (
     <main className="container">
-
       <h1 className="h1">{deal.product_title}</h1>
 
       <div className="card">
-
         <img
           src={deal.product_image_url ?? ""}
           style={{ width: "100%", borderRadius: 12 }}
@@ -184,113 +215,162 @@ export default function DealSellerPage() {
         </div>
 
         <div>{deal.product_description}</div>
-
       </div>
+
+      {/* NUEVO: bloque de trato cerrado */}
+      {deal.status === "closed" && (
+        <div
+          className="card"
+          style={{
+            marginTop: 12,
+            border: "1px solid rgba(34,197,94,.35)",
+            background: "rgba(34,197,94,.10)",
+          }}
+        >
+          <div style={{ fontWeight: 900, fontSize: 22 }}>
+            ✅ Trato cerrado
+          </div>
+
+          <div style={{ marginTop: 8, fontSize: 18 }}>
+            Precio final: <b>{money(finalClosedPrice)}</b>
+          </div>
+
+          {closingMessage?.content ? (
+            <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
+              {closingMessage.content}
+            </div>
+          ) : (
+            <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
+              El comprador aceptó la negociación y el producto fue vendido.
+            </div>
+          )}
+        </div>
+      )}
 
       {bestOffer && (
         <div className="card">
-
           <h3>Mejor oferta</h3>
 
           <div style={{ fontSize: 24, fontWeight: 800 }}>
             {money(bestOffer.proposed_price)}
           </div>
-
         </div>
       )}
 
       <div className="card">
-
         <h3>🤖 Recomendación IA</h3>
 
         <div
           style={{
             padding: 12,
             borderRadius: 10,
-            background: aiRecommendation.color
+            background: aiRecommendation.color,
           }}
         >
           <strong>{aiRecommendation.action}</strong>
-
           <div>{aiRecommendation.message}</div>
         </div>
-
       </div>
 
       <div className="card">
+        <h3>{showHistory ? "Historial de ofertas" : "Ofertas pendientes"}</h3>
 
-        <h3>
-          {showHistory ? "Historial de ofertas" : "Ofertas pendientes"}
-        </h3>
-
-        <button
-          className="btnGhost"
-          onClick={() => setShowHistory(!showHistory)}
-        >
+        <button className="btnGhost" onClick={() => setShowHistory(!showHistory)}>
           {showHistory ? "Ver pendientes" : "Ver historial"}
         </button>
 
-        {displayedOffers.map((o) => {
+        {displayedOffers.length === 0 ? (
+          <div style={{ marginTop: 12 }}>No hay ofertas para mostrar.</div>
+        ) : (
+          displayedOffers.map((o) => {
+            const rank = getOfferRank(
+              o.proposed_price,
+              terms?.seller_min_current ?? null
+            );
 
-          const rank = getOfferRank(
-            o.proposed_price,
-            terms?.seller_min_current ?? null
-          );
+            const probability = getCloseProbability(
+              o.proposed_price,
+              terms?.seller_min_current ?? null
+            );
 
-          const probability = getCloseProbability(
-            o.proposed_price,
-            terms?.seller_min_current ?? null
-          );
-
-          return (
-            <div key={o.id} className="card">
-
-              <div style={{ fontWeight: 800 }}>
-                {money(o.proposed_price)}
-              </div>
-
-              <div>{o.rationale}</div>
-
-              <div style={{
-                background: rank.color,
-                padding: 4,
-                borderRadius: 6,
-                display: "inline-block"
-              }}>
-                {rank.label}
-              </div>
-
-              <div>
-                Probabilidad cierre: {probability}%
-              </div>
-
-              {!o.seller_decision && (
-                <div style={{ marginTop: 10 }}>
-
-                  <button
-                    className="btn"
-                    onClick={() => decideOffer(o.id, "accept")}
-                  >
-                    Aceptar
-                  </button>
-
-                  <button
-                    className="btnGhost"
-                    onClick={() => decideOffer(o.id, "reject")}
-                  >
-                    Rechazar
-                  </button>
-
+            return (
+              <div key={o.id} className="card">
+                <div style={{ fontWeight: 800 }}>
+                  {money(o.proposed_price)}
                 </div>
-              )}
 
-            </div>
-          );
+                <div>{o.rationale}</div>
 
-        })}
+                <div
+                  style={{
+                    background: rank.color,
+                    padding: 4,
+                    borderRadius: 6,
+                    display: "inline-block",
+                    marginTop: 8,
+                  }}
+                >
+                  {rank.label}
+                </div>
 
+                <div style={{ marginTop: 8 }}>
+                  Probabilidad cierre: {probability}%
+                </div>
+
+                {!o.seller_decision && deal.status !== "closed" && (
+                  <div style={{ marginTop: 10 }}>
+                    <button
+                      className="btn"
+                      onClick={() => decideOffer(o.id, "accept")}
+                    >
+                      Aceptar
+                    </button>
+
+                    <button
+                      className="btnGhost"
+                      onClick={() => decideOffer(o.id, "reject")}
+                    >
+                      Rechazar
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
 
+      <div className="card">
+        <h3>Mensajes de negociación</h3>
+
+        {messages.length === 0 ? (
+          <div>Aún no hay mensajes.</div>
+        ) : (
+          messages.map((m) => (
+            <div
+              key={m.id}
+              style={{
+                padding: 10,
+                borderRadius: 10,
+                background: "rgba(255,255,255,.05)",
+                marginBottom: 8,
+              }}
+            >
+              <div style={{ fontSize: 12, opacity: 0.7 }}>
+                {m.sender_role}
+              </div>
+
+              <div>{m.content}</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <button className="btnGhost" onClick={() => router.push("/dashboard")}>
+          Volver al dashboard
+        </button>
+      </div>
     </main>
   );
 }

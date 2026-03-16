@@ -56,6 +56,7 @@ export default function ShopItemPage() {
 
   const [offer, setOffer] = useState<string>("");
   const [sending, setSending] = useState(false);
+  const [acceptingCounter, setAcceptingCounter] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [showOfferModal, setShowOfferModal] = useState(false);
 
@@ -66,6 +67,28 @@ export default function ShopItemPage() {
       .filter((o) => typeof o.proposed_price === "number")
       .sort((a, b) => Number(b.proposed_price) - Number(a.proposed_price))[0];
   }, [offers]);
+
+  const latestCounterOffer = useMemo(() => {
+    const aiMessages = [...messages]
+      .filter((m) => m.sender_role === "ai" && m.content?.startsWith("COUNTER_OFFER:"))
+      .sort((a, b) => {
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return tb - ta;
+      });
+
+    const latest = aiMessages[0];
+    if (!latest?.content) return null;
+
+    const match = latest.content.match(/^COUNTER_OFFER:(\d+)/);
+    if (!match) return null;
+
+    return {
+      price: Number(match[1]),
+      fullContent: latest.content,
+      text: latest.content.replace(/^COUNTER_OFFER:\d+\n?/, "").trim(),
+    };
+  }, [messages]);
 
   const demandBadge = useMemo(() => {
     if (offers.length >= 3) {
@@ -116,7 +139,19 @@ export default function ShopItemPage() {
     };
   }, [deal]);
 
-  async function reloadOffersAndMessages(currentDealId: string) {
+  async function reloadEverything(currentDealId: string) {
+    const { data: updatedDeal } = await supabase
+      .from("deals")
+      .select(
+        "id,status,created_at,product_title,product_description,product_price_public,product_image_url"
+      )
+      .eq("id", currentDealId)
+      .maybeSingle();
+
+    if (updatedDeal) {
+      setDeal(updatedDeal as DealRow);
+    }
+
     const { data: offersData } = await supabase
       .from("offers")
       .select("id,deal_id,proposed_price,rationale,created_at")
@@ -145,23 +180,7 @@ export default function ShopItemPage() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from("deals")
-        .select(
-          "id,status,created_at,product_title,product_description,product_price_public,product_image_url"
-        )
-        .eq("id", dealId)
-        .maybeSingle();
-
-      if (error || !data) {
-        setErrorMsg(error?.message ?? "Producto no encontrado.");
-        setLoading(false);
-        return;
-      }
-
-      setDeal(data as DealRow);
-
-      await reloadOffersAndMessages(dealId);
+      await reloadEverything(dealId);
       setLoading(false);
     })();
   }, [dealId]);
@@ -204,24 +223,44 @@ export default function ShopItemPage() {
       setOffer("");
       setShowOfferModal(false);
 
-      // refrescar estado del deal
-      const { data: updatedDeal } = await supabase
-        .from("deals")
-        .select(
-          "id,status,created_at,product_title,product_description,product_price_public,product_image_url"
-        )
-        .eq("id", deal.id)
-        .maybeSingle();
-
-      if (updatedDeal) {
-        setDeal(updatedDeal as DealRow);
-      }
-
-      await reloadOffersAndMessages(deal.id);
+      await reloadEverything(deal.id);
     } catch (e: any) {
       setToast(`❌ ${e?.message ?? "Error inesperado."}`);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function acceptCounterOffer() {
+    if (!deal || !latestCounterOffer) return;
+
+    setAcceptingCounter(true);
+    setToast(null);
+
+    try {
+      const res = await fetch("/api/accept-counteroffer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          dealId: deal.id,
+          acceptedPrice: latestCounterOffer.price,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(json?.error ?? "No se pudo aceptar la contraoferta.");
+      }
+
+      setToast(`✅ Contraoferta aceptada en ${money(latestCounterOffer.price)}.`);
+      await reloadEverything(deal.id);
+    } catch (e: any) {
+      setToast(`❌ ${e?.message ?? "Error inesperado."}`);
+    } finally {
+      setAcceptingCounter(false);
     }
   }
 
@@ -406,6 +445,36 @@ export default function ShopItemPage() {
             </div>
           ) : null}
 
+          {latestCounterOffer && deal.status !== "closed" ? (
+            <div
+              style={{
+                padding: 14,
+                borderRadius: 16,
+                background: "rgba(59,130,246,.10)",
+              }}
+            >
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Contraoferta IA</div>
+              <div style={{ fontSize: 26, fontWeight: 900 }}>
+                {money(latestCounterOffer.price)}
+              </div>
+              {latestCounterOffer.text ? (
+                <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+                  {latestCounterOffer.text}
+                </div>
+              ) : null}
+
+              <div className="btnRow" style={{ marginTop: 12 }}>
+                <button
+                  className="btn"
+                  disabled={acceptingCounter}
+                  onClick={acceptCounterOffer}
+                >
+                  {acceptingCounter ? "Aceptando…" : "Aceptar contraoferta IA"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <div
             style={{
               padding: 14,
@@ -459,25 +528,32 @@ export default function ShopItemPage() {
           <div className="muted">Aún no hay mensajes.</div>
         ) : (
           <div style={{ display: "grid", gap: 10 }}>
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                style={{
-                  padding: 12,
-                  borderRadius: 12,
-                  background:
-                    m.sender_role === "ai"
-                      ? "rgba(59,130,246,.12)"
-                      : "rgba(255,255,255,.05)",
-                }}
-              >
-                <div className="small" style={{ opacity: 0.7 }}>
-                  {m.sender_role ?? "unknown"} ·{" "}
-                  {m.created_at ? new Date(m.created_at).toLocaleString() : "—"}
+            {messages.map((m) => {
+              const cleanContent =
+                m.sender_role === "ai"
+                  ? (m.content ?? "").replace(/^COUNTER_OFFER:\d+\n?/, "")
+                  : m.content ?? "";
+
+              return (
+                <div
+                  key={m.id}
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    background:
+                      m.sender_role === "ai"
+                        ? "rgba(59,130,246,.12)"
+                        : "rgba(255,255,255,.05)",
+                  }}
+                >
+                  <div className="small" style={{ opacity: 0.7 }}>
+                    {m.sender_role ?? "unknown"} ·{" "}
+                    {m.created_at ? new Date(m.created_at).toLocaleString() : "—"}
+                  </div>
+                  <div style={{ marginTop: 6 }}>{cleanContent}</div>
                 </div>
-                <div style={{ marginTop: 6 }}>{m.content ?? ""}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

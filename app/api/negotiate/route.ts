@@ -204,9 +204,9 @@ export async function POST(req: Request) {
 
     // 8) Guardar mensaje IA
     await admin.from("messages").insert({
-      deal_id: dealId,
-      sender_role: "ai",
-      content: `Contraoferta sugerida: $${counterPrice}. ${aiMessage}`,
+        deal_id: dealId,
+        sender_role: "ai",
+        content: `COUNTER_OFFER:${counterPrice}\n${aiMessage}`,
     } as any);
 
     // 9) Marcar deal en negociación
