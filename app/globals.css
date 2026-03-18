@@ -237,3 +237,25 @@ button:disabled {
   background: rgba(255,107,107,0.08);
   color: #ffd1d1;
 }
+
+.statusDotPulse {
+  animation: statusPulse 1.4s infinite ease-in-out;
+}
+
+@keyframes statusPulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.45);
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 0.95;
+    box-shadow: 0 0 0 8px rgba(234, 179, 8, 0);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(234, 179, 8, 0);
+  }
+}

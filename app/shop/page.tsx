@@ -53,20 +53,32 @@ function getStatusBadge(status: string) {
   if (status === "closed") {
     return {
       label: "✅ Vendido",
-      bg: "rgba(34,197,94,.22)",
+      bg: "rgba(34,197,94,.18)",
+      border: "1px solid rgba(34,197,94,.28)",
+      glow: "0 0 0 rgba(0,0,0,0)",
+      dot: "#22c55e",
+      animated: false,
     };
   }
 
   if (status === "negotiating") {
     return {
       label: "⏳ En negociación",
-      bg: "rgba(234,179,8,.22)",
+      bg: "rgba(234,179,8,.16)",
+      border: "1px solid rgba(234,179,8,.34)",
+      glow: "0 0 18px rgba(234,179,8,.14)",
+      dot: "#eab308",
+      animated: true,
     };
   }
 
   return {
     label: "🟢 Disponible",
-    bg: "rgba(59,130,246,.22)",
+    bg: "rgba(59,130,246,.16)",
+    border: "1px solid rgba(59,130,246,.30)",
+    glow: "0 0 0 rgba(0,0,0,0)",
+    dot: "#3b82f6",
+    animated: false,
   };
 }
 
@@ -268,6 +280,14 @@ export default function ShopPage() {
                   color: "inherit",
                   display: "block",
                   transition: "transform .15s ease, box-shadow .15s ease",
+                  border:
+                    d.status === "negotiating"
+                      ? "1px solid rgba(234,179,8,.22)"
+                      : undefined,
+                  boxShadow:
+                    d.status === "negotiating"
+                      ? "0 0 22px rgba(234,179,8,.06)"
+                      : undefined,
                 }}
               >
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -310,13 +330,29 @@ export default function ShopPage() {
                   >
                     <div
                       style={{
-                        padding: "7px 10px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "7px 12px",
                         borderRadius: 999,
                         background: statusBadge.bg,
+                        border: statusBadge.border,
+                        boxShadow: statusBadge.glow,
                         fontWeight: 700,
                         fontSize: 13,
                       }}
                     >
+                      <span
+                        className={statusBadge.animated ? "statusDotPulse" : ""}
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: "50%",
+                          background: statusBadge.dot,
+                          display: "inline-block",
+                          flexShrink: 0,
+                        }}
+                      />
                       {statusBadge.label}
                     </div>
 

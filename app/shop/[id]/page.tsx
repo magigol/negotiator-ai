@@ -118,26 +118,42 @@ export default function ShopItemPage() {
       return {
         label: "—",
         bg: "rgba(255,255,255,.12)",
+        border: "1px solid rgba(255,255,255,.12)",
+        glow: "0 0 0 rgba(0,0,0,0)",
+        dot: "#fff",
+        animated: false,
       };
     }
 
     if (deal.status === "closed") {
       return {
         label: "✅ Vendido",
-        bg: "rgba(34,197,94,.22)",
+        bg: "rgba(34,197,94,.18)",
+        border: "1px solid rgba(34,197,94,.28)",
+        glow: "0 0 0 rgba(0,0,0,0)",
+        dot: "#22c55e",
+        animated: false,
       };
     }
 
     if (deal.status === "negotiating") {
       return {
         label: "⏳ En negociación",
-        bg: "rgba(234,179,8,.22)",
+        bg: "rgba(234,179,8,.16)",
+        border: "1px solid rgba(234,179,8,.34)",
+        glow: "0 0 18px rgba(234,179,8,.14)",
+        dot: "#eab308",
+        animated: true,
       };
     }
 
     return {
       label: "🟢 Disponible",
-      bg: "rgba(59,130,246,.22)",
+      bg: "rgba(59,130,246,.16)",
+      border: "1px solid rgba(59,130,246,.30)",
+      glow: "0 0 0 rgba(0,0,0,0)",
+      dot: "#3b82f6",
+      animated: false,
     };
   }, [deal]);
 
@@ -192,14 +208,6 @@ export default function ShopItemPage() {
 
       if (error || !data) {
         setErrorMsg(error?.message ?? "Producto no encontrado.");
-        setLoading(false);
-        return;
-      }
-
-      // Solo bloquear si está cerrado
-      if (data.status === "closed") {
-        setDeal(data as DealRow);
-        await reloadEverything(dealId);
         setLoading(false);
         return;
       }
@@ -380,14 +388,30 @@ export default function ShopItemPage() {
 
             <span
               style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
                 padding: "8px 12px",
                 borderRadius: 999,
                 background: statusBadge.bg,
+                border: statusBadge.border,
+                boxShadow: statusBadge.glow,
                 fontWeight: 800,
                 fontSize: 14,
                 height: "fit-content",
               }}
             >
+              <span
+                className={statusBadge.animated ? "statusDotPulse" : ""}
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: statusBadge.dot,
+                  display: "inline-block",
+                  flexShrink: 0,
+                }}
+              />
               {statusBadge.label}
             </span>
           </div>
