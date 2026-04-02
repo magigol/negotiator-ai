@@ -52,6 +52,12 @@ function money(n: number | null | undefined) {
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
+function isUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v
+  );
+}
+
 function getOfferRank(price: number | null, min: number | null) {
   if (!price || !min) return { label: "Sin evaluar", color: "#555" };
 
@@ -60,60 +66,111 @@ function getOfferRank(price: number | null, min: number | null) {
   if (ratio >= 1.08) return { label: "🔥 Excelente", color: "#22c55e" };
   if (ratio >= 1.0) return { label: "🟢 Buena", color: "#3b82f6" };
   if (ratio >= 0.92) return { label: "🟡 Media", color: "#eab308" };
-
   return { label: "🔴 Baja", color: "#ef4444" };
 }
 
-function getCloseProbability(price: number | null, min: number | null) {
+function getCloseProbability(
+  price: number | null,
+  min: number | null,
+  urgency: string | null,
+  offersCount: number,
+  daysPublished: number
+) {
   if (!price || !min) return 0;
 
+  let score = 0;
   const ratio = price / min;
 
-  if (ratio >= 1.1) return 85;
-  if (ratio >= 1.0) return 70;
-  if (ratio >= 0.95) return 50;
-  if (ratio >= 0.9) return 30;
+  if (ratio >= 1.05) score += 45;
+  else if (ratio >= 1.0) score += 35;
+  else if (ratio >= 0.95) score += 22;
+  else if (ratio >= 0.9) score += 12;
+  else score += 5;
 
-  return 15;
+  if ((urgency ?? "").toLowerCase() === "high") score += 15;
+  else if ((urgency ?? "").toLowerCase() === "medium") score += 8;
+
+  if (offersCount >= 3) score += 12;
+  else if (offersCount >= 2) score += 8;
+  else if (offersCount >= 1) score += 4;
+
+  if (daysPublished >= 14) score += 10;
+  else if (daysPublished >= 7) score += 6;
+  else if (daysPublished >= 3) score += 3;
+
+  return Math.max(0, Math.min(95, score));
 }
 
-function getAIRecommendation(bestOffer: number | null, sellerMinCurrent: number | null) {
+function getAIRecommendation(params: {
+  bestOffer: number | null;
+  sellerMinCurrent: number | null;
+  sellerUrgency: string | null;
+  offersCount: number;
+  daysPublished: number;
+  hasActiveCounterOffer: boolean;
+}) {
+  const {
+    bestOffer,
+    sellerMinCurrent,
+    sellerUrgency,
+    offersCount,
+    daysPublished,
+    hasActiveCounterOffer,
+  } = params;
+
   if (!bestOffer || !sellerMinCurrent) {
     return {
       action: "⏳ Esperar",
-      message: "Aún no hay suficientes ofertas para recomendar una acción.",
+      title: "Aún falta información",
+      message:
+        "Todavía no hay una oferta suficiente para recomendar una acción concreta. Mantén la publicación activa y espera más interés.",
       bg: "rgba(255,255,255,.08)",
       border: "1px solid rgba(255,255,255,.12)",
     };
   }
 
   const ratio = bestOffer / sellerMinCurrent;
+  const urgency = (sellerUrgency ?? "").toLowerCase();
 
   if (ratio >= 1.05) {
     return {
       action: "✅ Aceptar",
+      title: "La oferta supera tu mínimo actual",
       message:
-        "La mejor oferta supera cómodamente tu mínimo actual. La IA recomienda aceptar porque hay alta probabilidad de cierre.",
+        "La mejor oferta está por encima de tu mínimo actual. La IA recomienda aceptar porque el cierre es muy favorable y la probabilidad de venta es alta.",
       bg: "rgba(34,197,94,.14)",
       border: "1px solid rgba(34,197,94,.28)",
     };
   }
 
-  if (ratio >= 0.97) {
+  if (ratio >= 0.98 && (urgency === "high" || offersCount >= 2 || daysPublished >= 7)) {
     return {
-      action: "🟡 Considerar",
+      action: "🟡 Considerar aceptar",
+      title: "Oferta muy cercana al mínimo",
       message:
-        "La mejor oferta está muy cerca de tu mínimo actual. La IA recomienda considerar aceptar o intentar una contraoferta pequeña.",
+        "La mejor oferta está muy cerca de tu mínimo actual y además existen señales de cierre favorables, como urgencia alta, varias ofertas o tiempo prolongado publicado.",
       bg: "rgba(234,179,8,.14)",
       border: "1px solid rgba(234,179,8,.28)",
     };
   }
 
-  if (ratio >= 0.9) {
+  if (ratio >= 0.95 && hasActiveCounterOffer) {
     return {
-      action: "⏳ Esperar",
+      action: "🤝 Mantener negociación",
+      title: "La IA ya ve margen de cierre",
       message:
-        "La mejor oferta aún está algo por debajo de tu mínimo actual. La IA recomienda esperar o seguir negociando.",
+        "La oferta es competitiva y ya existe una contraoferta activa. La IA recomienda mantener la negociación abierta antes de rechazar.",
+      bg: "rgba(59,130,246,.14)",
+      border: "1px solid rgba(59,130,246,.28)",
+    };
+  }
+
+  if (ratio >= 0.92) {
+    return {
+      action: "⏳ Esperar o contraofertar",
+      title: "Oferta razonable, pero aún baja",
+      message:
+        "La oferta no está lejos de tu mínimo actual, pero todavía no es ideal. La IA recomienda esperar otra mejora o sostener la contraoferta.",
       bg: "rgba(59,130,246,.14)",
       border: "1px solid rgba(59,130,246,.28)",
     };
@@ -121,17 +178,82 @@ function getAIRecommendation(bestOffer: number | null, sellerMinCurrent: number 
 
   return {
     action: "❌ Rechazar",
+    title: "Oferta demasiado baja",
     message:
-      "La mejor oferta está demasiado lejos de tu mínimo actual. La IA recomienda rechazar o mantener la negociación abierta.",
+      "La mejor oferta está claramente por debajo de tu mínimo actual. La IA recomienda rechazar o mantener la publicación sin ceder todavía.",
     bg: "rgba(239,68,68,.14)",
     border: "1px solid rgba(239,68,68,.28)",
   };
 }
 
-function isUuid(v: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    v
-  );
+function getAISuggestedCounteroffer(params: {
+  bestOffer: number | null;
+  sellerMinCurrent: number | null;
+  sellerUrgency: string | null;
+  offersCount: number;
+  daysPublished: number;
+}) {
+  const {
+    bestOffer,
+    sellerMinCurrent,
+    sellerUrgency,
+    offersCount,
+    daysPublished,
+  } = params;
+
+  if (!bestOffer || !sellerMinCurrent) {
+    return {
+      suggestedPrice: null,
+      message: "Aún no hay suficiente información para sugerir una contraoferta.",
+    };
+  }
+
+  const urgency = (sellerUrgency ?? "").toLowerCase();
+  const ratio = bestOffer / sellerMinCurrent;
+
+  if (bestOffer >= sellerMinCurrent) {
+    return {
+      suggestedPrice: bestOffer,
+      message:
+        "La mejor oferta ya alcanza o supera tu mínimo actual. La IA recomienda aceptar en vez de contraofertar.",
+    };
+  }
+
+  let target = sellerMinCurrent;
+
+  if (ratio >= 0.97) {
+    target = Math.round((bestOffer + sellerMinCurrent) / 2);
+  } else if (ratio >= 0.93) {
+    target = Math.round(bestOffer + (sellerMinCurrent - bestOffer) * 0.7);
+  } else {
+    target = sellerMinCurrent;
+  }
+
+  if (urgency === "high") {
+    target = Math.round((target + bestOffer) / 2);
+  } else if (urgency === "medium") {
+    target = Math.round(target - (sellerMinCurrent - bestOffer) * 0.1);
+  }
+
+  if (daysPublished >= 10) {
+    target = Math.round((target + bestOffer) / 2);
+  } else if (daysPublished >= 5) {
+    target = Math.round(target - (sellerMinCurrent - bestOffer) * 0.08);
+  }
+
+  if (offersCount >= 3) {
+    target = Math.round(target + (sellerMinCurrent - bestOffer) * 0.08);
+  }
+
+  target = Math.max(bestOffer, Math.min(target, sellerMinCurrent));
+
+  return {
+    suggestedPrice: target,
+    message:
+      target === sellerMinCurrent
+        ? "La IA recomienda mantener una postura firme y sostener el mínimo actual."
+        : "La IA recomienda una contraoferta intermedia para aumentar la probabilidad de cierre sin ceder demasiado margen.",
+  };
 }
 
 export default function DealSellerPage() {
@@ -149,6 +271,7 @@ export default function DealSellerPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [actingOfferId, setActingOfferId] = useState<string | null>(null);
+  const [sendingCounteroffer, setSendingCounteroffer] = useState(false);
 
   async function loadData() {
     setErrorMsg(null);
@@ -272,12 +395,50 @@ export default function DealSellerPage() {
     return showHistory ? offers : pendingOffers;
   }, [showHistory, offers, pendingOffers]);
 
-  const aiRecommendation = useMemo(() => {
-    return getAIRecommendation(
-      bestOffer?.proposed_price ?? null,
-      terms?.seller_min_current ?? null
+  const hasActiveCounterOffer = useMemo(() => {
+    return messages.some(
+      (m) => m.sender_role === "ai" && (m.content ?? "").startsWith("COUNTER_OFFER:")
     );
-  }, [bestOffer, terms]);
+  }, [messages]);
+
+  const daysPublished = useMemo(() => {
+    if (!deal?.created_at) return 0;
+    const created = new Date(deal.created_at).getTime();
+    const now = Date.now();
+    const diff = now - created;
+    return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
+  }, [deal]);
+
+  const closeProbability = useMemo(() => {
+    return getCloseProbability(
+      bestOffer?.proposed_price ?? null,
+      terms?.seller_min_current ?? null,
+      terms?.seller_urgency ?? null,
+      offers.length,
+      daysPublished
+    );
+  }, [bestOffer, terms, offers.length, daysPublished]);
+
+  const aiRecommendation = useMemo(() => {
+    return getAIRecommendation({
+      bestOffer: bestOffer?.proposed_price ?? null,
+      sellerMinCurrent: terms?.seller_min_current ?? null,
+      sellerUrgency: terms?.seller_urgency ?? null,
+      offersCount: offers.length,
+      daysPublished,
+      hasActiveCounterOffer,
+    });
+  }, [bestOffer, terms, offers.length, daysPublished, hasActiveCounterOffer]);
+
+  const aiSuggestedCounteroffer = useMemo(() => {
+    return getAISuggestedCounteroffer({
+      bestOffer: bestOffer?.proposed_price ?? null,
+      sellerMinCurrent: terms?.seller_min_current ?? null,
+      sellerUrgency: terms?.seller_urgency ?? null,
+      offersCount: offers.length,
+      daysPublished,
+    });
+  }, [bestOffer, terms, offers.length, daysPublished]);
 
   const closingMessage = useMemo(() => {
     return [...messages]
@@ -320,9 +481,7 @@ export default function DealSellerPage() {
       }
 
       setActionMsg(
-        decision === "accept"
-          ? "✅ Oferta aceptada."
-          : "🟠 Oferta rechazada."
+        decision === "accept" ? "✅ Oferta aceptada." : "🟠 Oferta rechazada."
       );
 
       await loadData();
@@ -330,6 +489,45 @@ export default function DealSellerPage() {
       setActionMsg(`❌ ${e?.message ?? "No se pudo actualizar la oferta."}`);
     } finally {
       setActingOfferId(null);
+    }
+  }
+
+  async function sendSuggestedCounteroffer() {
+    if (!dealId || !aiSuggestedCounteroffer.suggestedPrice) return;
+
+    setSendingCounteroffer(true);
+    setActionMsg(null);
+
+    try {
+      const res = await fetch("/api/seller-counteroffer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          dealId,
+          counterPrice: aiSuggestedCounteroffer.suggestedPrice,
+          message: `La IA recomienda una contraoferta de ${money(
+            aiSuggestedCounteroffer.suggestedPrice
+          )}.`,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(json?.error ?? "No se pudo enviar la contraoferta.");
+      }
+
+      setActionMsg(
+        `🤖 Contraoferta enviada en ${money(aiSuggestedCounteroffer.suggestedPrice)}.`
+      );
+
+      await loadData();
+    } catch (e: any) {
+      setActionMsg(`❌ ${e?.message ?? "No se pudo enviar la contraoferta."}`);
+    } finally {
+      setSendingCounteroffer(false);
     }
   }
 
@@ -487,6 +685,10 @@ export default function DealSellerPage() {
               {bestOffer.rationale}
             </div>
           ) : null}
+
+          <div className="small" style={{ marginTop: 10, opacity: 0.85 }}>
+            Probabilidad estimada de cierre: <b>{closeProbability}%</b>
+          </div>
         </div>
       )}
 
@@ -502,13 +704,64 @@ export default function DealSellerPage() {
           🤖 Recomendación IA
         </div>
 
-        <div style={{ fontSize: 22, fontWeight: 900 }}>
-          {aiRecommendation.action}
-        </div>
+        <div style={{ fontSize: 22, fontWeight: 900 }}>{aiRecommendation.action}</div>
+
+        <div style={{ fontWeight: 800, marginTop: 6 }}>{aiRecommendation.title}</div>
 
         <div className="small" style={{ marginTop: 8, opacity: 0.92, lineHeight: 1.6 }}>
           {aiRecommendation.message}
         </div>
+
+        <div
+          style={{
+            marginTop: 12,
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <div className="badge">Ofertas: {offers.length}</div>
+          <div className="badge">Días publicado: {daysPublished}</div>
+          <div className="badge">Urgencia: {terms?.seller_urgency ?? "—"}</div>
+          <div className="badge">
+            Contraoferta IA: {hasActiveCounterOffer ? "activa" : "no"}
+          </div>
+        </div>
+      </div>
+
+      <div
+        className="card"
+        style={{
+          marginTop: 12,
+          background: "rgba(59,130,246,.10)",
+          border: "1px solid rgba(59,130,246,.22)",
+        }}
+      >
+        <div style={{ fontWeight: 900, fontSize: 20, marginBottom: 8 }}>
+          💡 Contraoferta sugerida
+        </div>
+
+        <div style={{ fontSize: 28, fontWeight: 900 }}>
+          {aiSuggestedCounteroffer.suggestedPrice !== null
+            ? money(aiSuggestedCounteroffer.suggestedPrice)
+            : "—"}
+        </div>
+
+        <div className="small" style={{ marginTop: 8, opacity: 0.92, lineHeight: 1.6 }}>
+          {aiSuggestedCounteroffer.message}
+        </div>
+
+        {deal.status !== "closed" && aiSuggestedCounteroffer.suggestedPrice !== null ? (
+          <div className="btnRow" style={{ marginTop: 12 }}>
+            <button
+              className="btn"
+              disabled={sendingCounteroffer}
+              onClick={sendSuggestedCounteroffer}
+            >
+              {sendingCounteroffer ? "Enviando…" : "Usar contraoferta sugerida"}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="card" style={{ marginTop: 12 }}>
@@ -552,7 +805,10 @@ export default function DealSellerPage() {
 
               const probability = getCloseProbability(
                 o.proposed_price,
-                terms?.seller_min_current ?? null
+                terms?.seller_min_current ?? null,
+                terms?.seller_urgency ?? null,
+                offers.length,
+                daysPublished
               );
 
               return (
@@ -636,10 +892,7 @@ export default function DealSellerPage() {
                 marginBottom: 8,
               }}
             >
-              <div style={{ fontSize: 12, opacity: 0.7 }}>
-                {m.sender_role}
-              </div>
-
+              <div style={{ fontSize: 12, opacity: 0.7 }}>{m.sender_role}</div>
               <div>{m.content}</div>
             </div>
           ))

@@ -188,7 +188,9 @@ export default function ShopItemPage() {
   }
 
   useEffect(() => {
-    (async () => {
+    let mounted = true;
+
+    async function init() {
       setLoading(true);
       setErrorMsg(null);
 
@@ -213,8 +215,58 @@ export default function ShopItemPage() {
       }
 
       await reloadEverything(dealId);
-      setLoading(false);
-    })();
+
+      if (mounted) setLoading(false);
+    }
+
+    init();
+
+    if (!dealId || typeof dealId !== "string") return;
+
+    const channel = supabase
+      .channel(`shop-item-${dealId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "deals",
+          filter: `id=eq.${dealId}`,
+        },
+        () => {
+          reloadEverything(dealId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "offers",
+          filter: `deal_id=eq.${dealId}`,
+        },
+        () => {
+          reloadEverything(dealId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "messages",
+          filter: `deal_id=eq.${dealId}`,
+        },
+        () => {
+          reloadEverything(dealId);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      mounted = false;
+      supabase.removeChannel(channel);
+    };
   }, [dealId]);
 
   async function proposePrice() {
@@ -499,14 +551,19 @@ export default function ShopItemPage() {
                 padding: 14,
                 borderRadius: 16,
                 background: "rgba(59,130,246,.10)",
+                border: "1px solid rgba(59,130,246,.20)",
               }}
             >
-              <div style={{ fontWeight: 800, marginBottom: 6 }}>Contraoferta IA</div>
+              <div style={{ fontWeight: 900, marginBottom: 6 }}>
+                🤖 Contraoferta del vendedor / IA
+              </div>
+
               <div style={{ fontSize: 26, fontWeight: 900 }}>
                 {money(latestCounterOffer.price)}
               </div>
+
               {latestCounterOffer.text ? (
-                <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+                <div className="small" style={{ marginTop: 6, opacity: 0.9, lineHeight: 1.6 }}>
                   {latestCounterOffer.text}
                 </div>
               ) : null}
@@ -517,7 +574,7 @@ export default function ShopItemPage() {
                   disabled={acceptingCounter}
                   onClick={acceptCounterOffer}
                 >
-                  {acceptingCounter ? "Aceptando…" : "Aceptar contraoferta IA"}
+                  {acceptingCounter ? "Aceptando…" : "Aceptar contraoferta"}
                 </button>
               </div>
             </div>
