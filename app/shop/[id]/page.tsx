@@ -286,6 +286,13 @@ export default function ShopItemPage() {
     setToast(null);
 
     try {
+      const { data: auth } = await supabase.auth.getUser();
+
+      if (!auth?.user?.id) {
+        router.push(`/login?next=${encodeURIComponent(`/shop/${deal.id}`)}`);
+        return;
+      }
+
       const res = await fetch("/api/negotiate", {
         method: "POST",
         headers: {
@@ -294,6 +301,7 @@ export default function ShopItemPage() {
         body: JSON.stringify({
           dealId: deal.id,
           proposedPrice: offerNumber,
+          buyerUserId: auth.user.id,
         }),
       });
 

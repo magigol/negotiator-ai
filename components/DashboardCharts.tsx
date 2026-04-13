@@ -2,88 +2,155 @@
 
 import {
   ResponsiveContainer,
+  BarChart,
+  Bar,
   LineChart,
   Line,
   XAxis,
   YAxis,
   Tooltip,
   CartesianGrid,
-  BarChart,
-  Bar,
-  ComposedChart,
+  PieChart,
+  Pie,
+  Cell,
 } from "recharts";
 
-type SalePoint = {
-  date: string;
-  value: number;
-};
-
-type StatusPoint = {
+type MonthlyPoint = {
   name: string;
   value: number;
 };
 
-type PriceComparisonPoint = {
+type ProductPoint = {
   name: string;
+  value: number;
+};
+
+type DashboardChartsProps = {
   published: number;
-  bestOffer: number;
+  active: number;
+  negotiating: number;
+  sold: number;
+  offersMade: number;
+  wins: number;
+  revenueByMonth: MonthlyPoint[];
+  offersByMonth: MonthlyPoint[];
+  topProductsByRevenue: ProductPoint[];
 };
-
-type Props = {
-  sales: SalePoint[];
-  statusStats: StatusPoint[];
-  priceComparison: PriceComparisonPoint[];
-};
-
-function money(n: number | null | undefined) {
-  if (n === null || n === undefined) return "—";
-  return `$${Number(n).toLocaleString("es-CL")}`;
-}
 
 export default function DashboardCharts({
-  sales,
-  statusStats,
-  priceComparison,
-}: Props) {
+  published,
+  active,
+  negotiating,
+  sold,
+  offersMade,
+  wins,
+  revenueByMonth,
+  offersByMonth,
+  topProductsByRevenue,
+}: DashboardChartsProps) {
+  const publicationData = [
+    { name: "Disponibles", value: active },
+    { name: "Negociando", value: negotiating },
+    { name: "Vendidos", value: sold },
+  ];
+
+  const activityData = [
+    { name: "Publicados", value: published },
+    { name: "Ofertas hechas", value: offersMade },
+    { name: "Compras ganadas", value: wins },
+  ];
+
+  const pieData = [
+    { name: "Disponibles", value: active },
+    { name: "Negociando", value: negotiating },
+    { name: "Vendidos", value: sold },
+  ];
+
+  const hasPublicationData = publicationData.some((d) => d.value > 0);
+  const hasActivityData = activityData.some((d) => d.value > 0);
+  const hasPieData = pieData.some((d) => d.value > 0);
+  const hasRevenueData = revenueByMonth.some((d) => d.value > 0);
+  const hasOffersByMonthData = offersByMonth.some((d) => d.value > 0);
+  const hasTopProducts = topProductsByRevenue.some((d) => d.value > 0);
+
   return (
     <div
       style={{
-        marginTop: 16,
         display: "grid",
         gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
         gap: 16,
+        marginTop: 16,
       }}
     >
       <div className="card">
-        <div style={{ fontWeight: 800, marginBottom: 12 }}>
-          Ventas cerradas por fecha
+        <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 12 }}>
+          Estado de tus publicaciones
         </div>
 
-        {sales.length === 0 ? (
-          <div className="muted">Aún no hay ventas cerradas para graficar.</div>
+        {!hasPublicationData ? (
+          <div className="muted">Aún no hay datos para este gráfico.</div>
         ) : (
           <div style={{ width: "100%", height: 280 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={sales}>
-                <CartesianGrid stroke="rgba(255,255,255,.08)" strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip
-                  formatter={(value: any) => money(Number(value))}
-                  contentStyle={{
-                    background: "#111",
-                    border: "1px solid rgba(255,255,255,.12)",
-                    borderRadius: 12,
-                  }}
-                />
-                <Line
-                  type="monotone"
+            <ResponsiveContainer>
+              <BarChart data={publicationData}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+                <XAxis dataKey="name" />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Bar dataKey="value" radius={[8, 8, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 12 }}>
+          Distribución de publicaciones
+        </div>
+
+        {!hasPieData ? (
+          <div className="muted">Aún no hay datos para este gráfico.</div>
+        ) : (
+          <div style={{ width: "100%", height: 280 }}>
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie
+                  data={pieData}
                   dataKey="value"
-                  stroke="#22c55e"
-                  strokeWidth={3}
-                  dot={{ r: 4 }}
-                  activeDot={{ r: 6 }}
-                />
+                  nameKey="name"
+                  outerRadius={90}
+                  innerRadius={45}
+                  paddingAngle={3}
+                  label
+                >
+                  {pieData.map((entry, index) => (
+                    <Cell key={`${entry.name}-${index}`} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 12 }}>
+          Ingresos por mes
+        </div>
+
+        {!hasRevenueData ? (
+          <div className="muted">Aún no hay ingresos cerrados para graficar.</div>
+        ) : (
+          <div style={{ width: "100%", height: 300 }}>
+            <ResponsiveContainer>
+              <LineChart data={revenueByMonth}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip />
+                <Line type="monotone" dataKey="value" strokeWidth={3} dot />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -91,72 +158,66 @@ export default function DashboardCharts({
       </div>
 
       <div className="card">
-        <div style={{ fontWeight: 800, marginBottom: 12 }}>
-          Estado de publicaciones
+        <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 12 }}>
+          Ofertas por mes
         </div>
 
-        {statusStats.length === 0 ? (
-          <div className="muted">No hay datos de estados.</div>
+        {!hasOffersByMonthData ? (
+          <div className="muted">Aún no hay ofertas suficientes para graficar.</div>
         ) : (
-          <div style={{ width: "100%", height: 280 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={statusStats}>
-                <CartesianGrid stroke="rgba(255,255,255,.08)" strokeDasharray="3 3" />
+          <div style={{ width: "100%", height: 300 }}>
+            <ResponsiveContainer>
+              <BarChart data={offersByMonth}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
                 <XAxis dataKey="name" />
                 <YAxis allowDecimals={false} />
-                <Tooltip
-                  formatter={(value: any) => Number(value)}
-                  contentStyle={{
-                    background: "#111",
-                    border: "1px solid rgba(255,255,255,.12)",
-                    borderRadius: 12,
-                  }}
-                />
-                <Bar dataKey="value" fill="#3b82f6" radius={[8, 8, 0, 0]} />
+                <Tooltip />
+                <Bar dataKey="value" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         )}
       </div>
 
-      <div className="card" style={{ gridColumn: "1 / -1" }}>
-        <div style={{ fontWeight: 800, marginBottom: 12 }}>
-          Precio publicado vs mejor oferta
+      <div className="card">
+        <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 12 }}>
+          Top productos por ingresos
         </div>
 
-        {priceComparison.length === 0 ? (
-          <div className="muted">Aún no hay datos suficientes para comparar precios.</div>
+        {!hasTopProducts ? (
+          <div className="muted">Aún no hay productos vendidos para este gráfico.</div>
         ) : (
           <div style={{ width: "100%", height: 320 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={priceComparison}>
-                <CartesianGrid stroke="rgba(255,255,255,.08)" strokeDasharray="3 3" />
+            <ResponsiveContainer>
+              <BarChart data={topProductsByRevenue} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+                <XAxis type="number" />
+                <YAxis dataKey="name" type="category" width={120} />
+                <Tooltip />
+                <Bar dataKey="value" radius={[0, 8, 8, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 12 }}>
+          Actividad general
+        </div>
+
+        {!hasActivityData ? (
+          <div className="muted">Aún no hay datos para este gráfico.</div>
+        ) : (
+          <div style={{ width: "100%", height: 300 }}>
+            <ResponsiveContainer>
+              <BarChart data={activityData}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
                 <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip
-                  formatter={(value: any, name: any) => [
-                    money(Number(value)),
-                    name === "published" ? "Precio publicado" : "Mejor oferta",
-                  ]}
-                  contentStyle={{
-                    background: "#111",
-                    border: "1px solid rgba(255,255,255,.12)",
-                    borderRadius: 12,
-                  }}
-                />
-                <Bar
-                  dataKey="published"
-                  fill="rgba(59,130,246,.65)"
-                  radius={[8, 8, 0, 0]}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="bestOffer"
-                  stroke="#22c55e"
-                  strokeWidth={3}
-                  dot={{ r: 4 }}
-                />
-              </ComposedChart>
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Bar dataKey="value" radius={[8, 8, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         )}

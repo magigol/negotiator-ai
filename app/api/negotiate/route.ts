@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+type NegotiateReq = {
+  dealId?: string;
+  deal_id?: string;
+  proposedPrice?: number;
+  proposed_price?: number;
+  buyerUserId?: string;
+  buyer_user_id?: string;
+};
+
 function assertEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -13,9 +22,11 @@ function clamp(n: number, lo: number, hi: number) {
 
 async function callOpenAI({
   apiKey,
+  model,
   input,
 }: {
   apiKey: string;
+  model: string;
   input: any;
 }) {
   const res = await fetch("https://api.openai.com/v1/responses", {
@@ -25,7 +36,7 @@ async function callOpenAI({
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-5.1-mini",
+      model,
       temperature: 0.2,
       input,
     }),
@@ -41,31 +52,45 @@ async function callOpenAI({
     throw new Error(msg);
   }
 
-  return json?.output_text || json?.output?.[0]?.content?.[0]?.text || "";
+  const outputText: string =
+    json?.output_text ||
+    json?.output?.[0]?.content?.[0]?.text ||
+    "";
+
+  if (!outputText) {
+    throw new Error("OpenAI returned empty output_text");
+  }
+
+  return outputText;
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
+    const body = (await req.json().catch(() => ({}))) as NegotiateReq;
 
-    const dealId: string | undefined = body.dealId ?? body.deal_id;
+    const dealId = body.dealId ?? body.deal_id;
     const proposedPriceRaw = body.proposedPrice ?? body.proposed_price;
+    const buyerUserId = body.buyerUserId ?? body.buyer_user_id;
 
     if (!dealId) {
-      return NextResponse.json({ error: "dealId is required" }, { status: 400 });
-    }
-
-    if (proposedPriceRaw === undefined || proposedPriceRaw === null) {
       return NextResponse.json(
-        { error: "proposedPrice is required" },
+        { error: "dealId is required" },
         { status: 400 }
       );
     }
 
     const proposedPrice = Number(proposedPriceRaw);
+
     if (!Number.isFinite(proposedPrice) || proposedPrice <= 0) {
       return NextResponse.json(
         { error: "proposedPrice must be a positive number" },
+        { status: 400 }
+      );
+    }
+
+    if (!buyerUserId) {
+      return NextResponse.json(
+        { error: "buyerUserId is required" },
         { status: 400 }
       );
     }
@@ -78,148 +103,254 @@ export async function POST(req: Request) {
       auth: { persistSession: false },
     });
 
-    // 1) Deal
+    // 1) Traer deal
     const { data: deal, error: dealErr } = await admin
       .from("deals")
-      .select("id,status,product_title,product_description,product_price_public")
+      .select(
+        "id,status,owner_user_id,product_title,product_description,product_price_public,product_image_url"
+      )
       .eq("id", dealId)
       .maybeSingle();
 
     if (dealErr) throw dealErr;
+
     if (!deal) {
-      return NextResponse.json({ error: "Deal not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Deal not found" },
+        { status: 404 }
+      );
     }
 
     if (deal.status === "closed") {
       return NextResponse.json(
-        { error: "Deal is already closed" },
+        { error: "This product is already sold" },
         { status: 400 }
       );
     }
 
-    // 2) Terms
+    // 2) Evitar ofertar por tu propio producto
+    if (deal.owner_user_id && deal.owner_user_id === buyerUserId) {
+      return NextResponse.json(
+        { error: "No puedes ofertar por tu propio producto." },
+        { status: 400 }
+      );
+    }
+
+    // 3) Traer terms
     const { data: terms, error: termsErr } = await admin
       .from("deal_terms")
       .select(
-        "deal_id,seller_min,seller_min_current,seller_urgency,buyer_max,buyer_initial_offer,buyer_urgency"
+        "deal_id,seller_initial,seller_min,seller_min_current,seller_urgency,buyer_max,buyer_initial_offer,buyer_urgency"
       )
       .eq("deal_id", dealId)
       .maybeSingle();
 
     if (termsErr) throw termsErr;
+
     if (!terms) {
       return NextResponse.json(
-        { error: "deal_terms not found" },
+        { error: "deal_terms not found for this deal" },
         { status: 404 }
       );
     }
 
     const sellerMin = Number(terms.seller_min ?? 0);
     const sellerMinCurrent = Number(terms.seller_min_current ?? sellerMin);
+    const sellerInitial = Number(terms.seller_initial ?? 0);
 
-    // 3) Última oferta previa para hacer la negociación más natural
-    const { data: lastOfferRow } = await admin
+    // Nota:
+    // Esto mantiene compatibilidad con tu modelo actual.
+    // Más adelante conviene mover buyer_max y buyer_initial_offer
+    // a una tabla por comprador, no global del deal.
+    const buyerInitial =
+      terms.buyer_initial_offer === null || terms.buyer_initial_offer === undefined
+        ? proposedPrice
+        : Number(terms.buyer_initial_offer);
+
+    const buyerMax =
+      terms.buyer_max === null || terms.buyer_max === undefined
+        ? proposedPrice
+        : Math.max(Number(terms.buyer_max), proposedPrice);
+
+    // 4) Guardar oferta del comprador
+    const { data: insertedOffer, error: offerErr } = await admin
       .from("offers")
-      .select("proposed_price, created_at")
-      .eq("deal_id", dealId)
-      .order("created_at", { ascending: false })
-      .limit(1)
+      .insert({
+        deal_id: dealId,
+        buyer_user_id: buyerUserId,
+        proposed_price: proposedPrice,
+        rationale: "Oferta enviada por comprador",
+        buyer_status: "submitted",
+        seller_status: "pending",
+        buyer_decision: null,
+        seller_decision: null,
+      } as any)
+      .select("id,deal_id,proposed_price,created_at")
       .maybeSingle();
 
-    const lastOffer = Number(lastOfferRow?.proposed_price ?? 0);
+    if (offerErr) throw offerErr;
 
-    // 4) Guardar la nueva oferta del comprador
-    const { error: insertOfferErr } = await admin.from("offers").insert({
-      deal_id: dealId,
-      proposed_price: proposedPrice,
-      rationale: "Oferta enviada por comprador",
-      buyer_status: "submitted",
-      seller_status: "pending",
-    } as any);
-
-    if (insertOfferErr) throw insertOfferErr;
-
-    // 5) Guardar mensaje del comprador
-    await admin.from("messages").insert({
+    // 5) Registrar mensaje del comprador
+    const { error: buyerMsgErr } = await admin.from("messages").insert({
       deal_id: dealId,
       sender_role: "buyer",
-      content: `El comprador propone ${proposedPrice}.`,
+      sender_user_id: buyerUserId,
+      content: `Oferta del comprador: $${proposedPrice}`,
     } as any);
 
-    // 6) Calcular contraoferta base
-    // estrategia:
-    // - si la oferta supera el mínimo actual, el punto medio
-    // - si está por debajo, acercarse al mínimo
-    // - si ya había otra oferta, la IA se mueve menos bruscamente
-    let counterPrice = proposedPrice;
-
-    if (proposedPrice >= sellerMinCurrent) {
-      counterPrice = Math.round((proposedPrice + sellerMinCurrent) / 2);
-    } else {
-      counterPrice = Math.round((proposedPrice + sellerMinCurrent * 2) / 3);
+    if (buyerMsgErr) {
+      // No frenamos todo el flujo por esto
+      console.error("buyer message insert failed:", buyerMsgErr);
     }
 
-    if (lastOffer > 0) {
-      counterPrice = Math.round((counterPrice + lastOffer) / 2);
+    // 6) Actualizar estado del deal
+    const { error: updateDealErr } = await admin
+      .from("deals")
+      .update({ status: "negotiating" })
+      .eq("id", dealId);
+
+    if (updateDealErr) throw updateDealErr;
+
+    // 7) Mantener compatibilidad con IA actual
+    const { error: updateTermsErr } = await admin
+      .from("deal_terms")
+      .update({
+        buyer_initial_offer: buyerInitial,
+        buyer_max: buyerMax,
+      } as any)
+      .eq("deal_id", dealId);
+
+    if (updateTermsErr) {
+      console.error("deal_terms update failed:", updateTermsErr);
     }
 
-    counterPrice = clamp(
-      counterPrice,
-      Math.min(proposedPrice, sellerMinCurrent),
-      Math.max(proposedPrice, sellerMinCurrent)
-    );
+    // 8) Heurística base
+    const hasOverlap = buyerMax >= sellerMinCurrent;
+    const midpoint = (buyerMax + sellerMinCurrent) / 2;
 
-    // 7) Mensaje IA
-    let aiMessage = `Podemos continuar la negociación con una contraoferta de $${counterPrice}.`;
+    const suggested = hasOverlap
+      ? Math.round(midpoint)
+      : Math.round(sellerMinCurrent);
+
+    const offerFloor = sellerMinCurrent;
+    const offerCeil = hasOverlap ? buyerMax : sellerMinCurrent;
+
+    const offerCandidate = clamp(suggested, offerFloor, offerCeil);
+
+    // 9) Llamada a OpenAI para contraoferta
+    const model = "gpt-5.1-mini";
+
+    const system = `
+Eres un negociador experto para marketplace.
+Debes responder SIEMPRE con JSON válido con esta forma:
+
+{
+  "offer_price": number,
+  "rationale": string,
+  "buyer_message": string
+}
+
+Reglas:
+- offer_price debe estar entre seller_min_current y buyer_max cuando exista cruce.
+- Si buyer_max < seller_min_current, offer_price debe ser seller_min_current.
+- buyer_message debe ser breve, claro y convincente.
+- No reveles variables internas como buyer_max o seller_min_current.
+- Usa moneda "$".
+`.trim();
+
+    const userInput = {
+      deal: {
+        title: deal.product_title,
+        description: deal.product_description,
+        public_price: deal.product_price_public,
+      },
+      terms: {
+        seller_initial: sellerInitial,
+        seller_min: sellerMin,
+        seller_min_current: sellerMinCurrent,
+        seller_urgency: terms.seller_urgency,
+        buyer_max: buyerMax,
+        buyer_initial_offer: buyerInitial,
+        buyer_urgency: terms.buyer_urgency,
+      },
+      new_offer: {
+        proposed_price: proposedPrice,
+      },
+      hint: {
+        heuristic_offer_price: offerCandidate,
+      },
+    };
+
+    let proposal: {
+      offer_price: number;
+      rationale: string;
+      buyer_message: string;
+    };
 
     try {
-      const output = await callOpenAI({
+      const outputText = await callOpenAI({
         apiKey: openaiKey,
+        model,
         input: [
-          {
-            role: "system",
-            content:
-              "Eres un negociador experto. Responde con una sola frase corta, natural y convincente en español proponiendo una contraoferta.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              product: deal.product_title,
-              public_price: deal.product_price_public,
-              buyer_offer: proposedPrice,
-              last_offer: lastOffer || null,
-              seller_min_current: sellerMinCurrent,
-              suggested_counteroffer: counterPrice,
-            }),
-          },
+          { role: "system", content: system },
+          { role: "user", content: JSON.stringify(userInput) },
         ],
       });
 
-      if (output && output.trim()) {
-        aiMessage = output.trim();
-      }
-    } catch {
-      // fallback silencioso
+      proposal = JSON.parse(outputText);
+    } catch (e) {
+      proposal = {
+        offer_price: offerCandidate,
+        rationale:
+          "Contraoferta calculada por heurística según el punto medio entre la oferta del comprador y el mínimo actual del vendedor.",
+        buyer_message: `Podemos avanzar con una contraoferta de $${offerCandidate}.`,
+      };
     }
 
-    // 8) Guardar mensaje IA
-    await admin.from("messages").insert({
-        deal_id: dealId,
-        sender_role: "ai",
-        content: `COUNTER_OFFER:${counterPrice}\n${aiMessage}`,
+    // Normalizar precio final
+    if (hasOverlap) {
+      proposal.offer_price = clamp(
+        Number(proposal.offer_price),
+        sellerMinCurrent,
+        buyerMax
+      );
+    } else {
+      proposal.offer_price = sellerMinCurrent;
+    }
+
+    // 10) Guardar contraoferta IA en messages
+    const { error: aiMsgErr } = await admin.from("messages").insert({
+      deal_id: dealId,
+      sender_role: "ai",
+      content: `COUNTER_OFFER:${proposal.offer_price}\n${proposal.buyer_message}`,
     } as any);
 
-    // 9) Marcar deal en negociación
-    if (deal.status === "active") {
-      await admin.from("deals").update({ status: "negotiating" }).eq("id", dealId);
+    if (aiMsgErr) {
+      console.error("ai counteroffer message insert failed:", aiMsgErr);
+    }
+
+    // 11) También guardamos un mensaje explicativo
+    const { error: aiExplainErr } = await admin.from("messages").insert({
+      deal_id: dealId,
+      sender_role: "ai",
+      content: `Razonamiento IA: ${proposal.rationale}`,
+    } as any);
+
+    if (aiExplainErr) {
+      console.error("ai rationale message insert failed:", aiExplainErr);
     }
 
     return NextResponse.json({
       ok: true,
       dealId,
-      buyerOffer: proposedPrice,
-      counterOffer: counterPrice,
-      aiMessage,
+      offer: insertedOffer ?? null,
+      proposal,
+      meta: {
+        hasOverlap,
+        sellerMinCurrent,
+        buyerMax,
+        heuristicOffer: offerCandidate,
+      },
     });
   } catch (e: any) {
     console.error(e);

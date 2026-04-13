@@ -13,6 +13,8 @@ type Deal = {
   product_price_public: number | null;
   product_image_url: string | null;
   owner_user_id: string | null;
+  final_price?: number | null;
+  buyer_user_id?: string | null;
 };
 
 type DealTerms = {
@@ -30,6 +32,7 @@ type DealTerms = {
 type Offer = {
   id: string;
   deal_id: string;
+  buyer_user_id?: string | null;
   proposed_price: number | null;
   rationale: string | null;
   seller_decision: string | null;
@@ -43,6 +46,7 @@ type Message = {
   id: string;
   deal_id: string;
   sender_role: string | null;
+  sender_user_id?: string | null;
   content: string | null;
   created_at: string | null;
 };
@@ -272,6 +276,7 @@ export default function DealSellerPage() {
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [actingOfferId, setActingOfferId] = useState<string | null>(null);
   const [sendingCounteroffer, setSendingCounteroffer] = useState(false);
+  const [acceptingOfferId, setAcceptingOfferId] = useState<string | null>(null);
 
   async function loadData() {
     setErrorMsg(null);
@@ -284,14 +289,14 @@ export default function DealSellerPage() {
 
     const { data: auth } = await supabase.auth.getUser();
     if (!auth?.user) {
-      router.push("/login");
+      router.push(`/login?next=${encodeURIComponent(`/deal/${dealId}`)}`);
       return;
     }
 
     const { data: dealData, error: dealErr } = await supabase
       .from("deals")
       .select(
-        "id,status,created_at,product_title,product_description,product_price_public,product_image_url,owner_user_id"
+        "id,status,created_at,product_title,product_description,product_price_public,product_image_url,owner_user_id,final_price,buyer_user_id"
       )
       .eq("id", dealId)
       .maybeSingle();
@@ -323,7 +328,7 @@ export default function DealSellerPage() {
     const { data: offersData } = await supabase
       .from("offers")
       .select(
-        "id,deal_id,proposed_price,rationale,seller_decision,buyer_decision,buyer_status,seller_status,created_at"
+        "id,deal_id,buyer_user_id,proposed_price,rationale,seller_decision,buyer_decision,buyer_status,seller_status,created_at"
       )
       .eq("deal_id", dealId)
       .order("created_at", { ascending: false });
@@ -332,7 +337,7 @@ export default function DealSellerPage() {
 
     const { data: messagesData } = await supabase
       .from("messages")
-      .select("id,deal_id,sender_role,content,created_at")
+      .select("id,deal_id,sender_role,sender_user_id,content,created_at")
       .eq("deal_id", dealId)
       .order("created_at", { ascending: true });
 
@@ -451,13 +456,17 @@ export default function DealSellerPage() {
   }, [messages]);
 
   const finalClosedPrice = useMemo(() => {
+    if (deal?.final_price !== null && deal?.final_price !== undefined) {
+      return deal.final_price;
+    }
+
     if (!closingMessage?.content) return null;
     const match = closingMessage.content.match(/\$(\d[\d.]*)/);
     if (!match) return null;
     const normalized = match[1].replace(/\./g, "");
     const parsed = Number(normalized);
     return Number.isFinite(parsed) ? parsed : null;
-  }, [closingMessage]);
+  }, [closingMessage, deal]);
 
   async function decideOffer(id: string, decision: "accept" | "reject") {
     if (!dealId) return;
@@ -476,12 +485,8 @@ export default function DealSellerPage() {
 
       if (error) throw error;
 
-      if (decision === "accept") {
-        await supabase.from("deals").update({ status: "closed" }).eq("id", dealId);
-      }
-
       setActionMsg(
-        decision === "accept" ? "✅ Oferta aceptada." : "🟠 Oferta rechazada."
+        decision === "accept" ? "✅ Oferta actualizada." : "🟠 Oferta rechazada."
       );
 
       await loadData();
@@ -489,6 +494,39 @@ export default function DealSellerPage() {
       setActionMsg(`❌ ${e?.message ?? "No se pudo actualizar la oferta."}`);
     } finally {
       setActingOfferId(null);
+    }
+  }
+
+  async function acceptOffer(offerId: string) {
+    if (!deal) return;
+
+    setAcceptingOfferId(offerId);
+    setActionMsg(null);
+
+    try {
+      const res = await fetch("/api/accept-offer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          dealId: deal.id,
+          offerId,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(json?.error ?? "No se pudo aceptar la oferta.");
+      }
+
+      setActionMsg(`✅ Oferta aceptada en ${money(json.acceptedPrice)}.`);
+      await loadData();
+    } catch (e: any) {
+      setActionMsg(`❌ ${e?.message ?? "No se pudo aceptar la oferta."}`);
+    } finally {
+      setAcceptingOfferId(null);
     }
   }
 
@@ -616,13 +654,18 @@ export default function DealSellerPage() {
             Precio final: <b>{money(finalClosedPrice)}</b>
           </div>
 
+          <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+            Comprador ganador:{" "}
+            <b>{deal.buyer_user_id ? deal.buyer_user_id : "—"}</b>
+          </div>
+
           {closingMessage?.content ? (
             <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
               {closingMessage.content}
             </div>
           ) : (
             <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
-              El comprador aceptó la negociación y el producto fue vendido.
+              El trato fue cerrado correctamente.
             </div>
           )}
         </div>
@@ -845,6 +888,10 @@ export default function DealSellerPage() {
                       </div>
 
                       <div className="small" style={{ marginTop: 8, opacity: 0.7 }}>
+                        Comprador: {o.buyer_user_id ?? "—"}
+                      </div>
+
+                      <div className="small" style={{ marginTop: 6, opacity: 0.7 }}>
                         {o.created_at ? new Date(o.created_at).toLocaleString() : "—"}
                       </div>
                     </div>
@@ -853,15 +900,15 @@ export default function DealSellerPage() {
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         <button
                           className="btn"
-                          disabled={actingOfferId === o.id}
-                          onClick={() => decideOffer(o.id, "accept")}
+                          disabled={acceptingOfferId === o.id || deal.status === "closed"}
+                          onClick={() => acceptOffer(o.id)}
                         >
-                          {actingOfferId === o.id ? "…" : "Aceptar"}
+                          {acceptingOfferId === o.id ? "Aceptando…" : "Aceptar oferta"}
                         </button>
 
                         <button
                           className="btnGhost"
-                          disabled={actingOfferId === o.id}
+                          disabled={actingOfferId === o.id || deal.status === "closed"}
                           onClick={() => decideOffer(o.id, "reject")}
                         >
                           Rechazar

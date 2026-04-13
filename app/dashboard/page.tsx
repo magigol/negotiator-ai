@@ -1,35 +1,41 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
 import DashboardCharts from "@/components/DashboardCharts";
+import SalesAdvisor from "@/components/SalesAdvisor";
 
 type DealRow = {
   id: string;
   status: string;
   created_at: string;
+  owner_user_id: string | null;
+  buyer_user_id?: string | null;
+  final_price?: number | null;
   product_title: string | null;
+  product_description: string | null;
   product_price_public: number | null;
   product_image_url: string | null;
-  product_description: string | null;
-  owner_user_id: string | null;
 };
 
 type OfferRow = {
   id: string;
   deal_id: string;
+  buyer_user_id: string | null;
   proposed_price: number | null;
   created_at: string | null;
 };
 
-type MessageRow = {
-  id: string;
-  deal_id: string;
-  sender_role: string | null;
-  content: string | null;
-  created_at: string | null;
+type MonthlyPoint = {
+  name: string;
+  value: number;
+};
+
+type ProductPoint = {
+  name: string;
+  value: number;
 };
 
 function money(n: number | null | undefined) {
@@ -37,496 +43,419 @@ function money(n: number | null | undefined) {
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
-function getStatusBadge(status: string) {
-  if (status === "closed") {
-    return {
-      label: "✅ Vendida",
-      bg: "rgba(34,197,94,.20)",
-    };
+function statCard(title: string, value: string | number, sub?: string) {
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="small" style={{ opacity: 0.75 }}>{title}</div>
+      <div style={{ fontSize: 28, fontWeight: 900 }}>{value}</div>
+      {sub && <div className="small">{sub}</div>}
+    </div>
+  );
+}
+
+function buildLastSixMonthsLabels() {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat("es-CL", {
+    month: "short",
+    year: "2-digit",
+  });
+
+  const labels: string[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    labels.push(formatter.format(d));
+  }
+  return labels;
+}
+
+function buildMonthlySeriesFromDeals(deals: DealRow[]): MonthlyPoint[] {
+  const labels = buildLastSixMonthsLabels();
+  const formatter = new Intl.DateTimeFormat("es-CL", {
+    month: "short",
+    year: "2-digit",
+  });
+
+  const map = new Map<string, number>();
+  labels.forEach((label) => map.set(label, 0));
+
+  for (const deal of deals) {
+    if (!deal.created_at) continue;
+    if (!deal.final_price) continue;
+
+    const date = new Date(deal.created_at);
+    const key = formatter.format(new Date(date.getFullYear(), date.getMonth(), 1));
+
+    if (map.has(key)) {
+      map.set(key, (map.get(key) ?? 0) + Number(deal.final_price ?? 0));
+    }
   }
 
-  if (status === "negotiating") {
-    return {
-      label: "⏳ En negociación",
-      bg: "rgba(234,179,8,.20)",
-    };
+  return labels.map((label) => ({
+    name: label,
+    value: map.get(label) ?? 0,
+  }));
+}
+
+function buildMonthlySeriesFromOffers(offers: OfferRow[]): MonthlyPoint[] {
+  const labels = buildLastSixMonthsLabels();
+  const formatter = new Intl.DateTimeFormat("es-CL", {
+    month: "short",
+    year: "2-digit",
+  });
+
+  const map = new Map<string, number>();
+  labels.forEach((label) => map.set(label, 0));
+
+  for (const offer of offers) {
+    if (!offer.created_at) continue;
+
+    const date = new Date(offer.created_at);
+    const key = formatter.format(new Date(date.getFullYear(), date.getMonth(), 1));
+
+    if (map.has(key)) {
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
   }
 
-  return {
-    label: "🟢 Disponible",
-    bg: "rgba(59,130,246,.20)",
-  };
+  return labels.map((label) => ({
+    name: label,
+    value: map.get(label) ?? 0,
+  }));
+}
+
+function buildTopProductsByRevenue(deals: DealRow[]): ProductPoint[] {
+  return deals
+    .filter((d) => d.status === "closed" && Number(d.final_price ?? 0) > 0)
+    .map((d) => ({
+      name:
+        (d.product_title ?? "Sin título").length > 18
+          ? `${(d.product_title ?? "Sin título").slice(0, 18)}...`
+          : (d.product_title ?? "Sin título"),
+      value: Number(d.final_price ?? 0),
+    }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 5);
 }
 
 export default function DashboardPage() {
-  const [deals, setDeals] = useState<DealRow[]>([]);
-  const [offers, setOffers] = useState<OfferRow[]>([]);
-  const [messages, setMessages] = useState<MessageRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [errMsg, setErrMsg] = useState<string | null>(null);
-
   const router = useRouter();
+
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [ownedDeals, setOwnedDeals] = useState<DealRow[]>([]);
+  const [buyerOffers, setBuyerOffers] = useState<OfferRow[]>([]);
+  const [wonDeals, setWonDeals] = useState<DealRow[]>([]);
+
+  async function loadData() {
+    setErrorMsg(null);
+
+    const { data: auth } = await supabase.auth.getUser();
+
+    if (!auth?.user?.id) {
+      router.push(`/login?next=${encodeURIComponent("/dashboard")}`);
+      return;
+    }
+
+    const userId = auth.user.id;
+
+    const { data: ownedDealsData, error: ownedDealsErr } = await supabase
+      .from("deals")
+      .select(
+        "id,status,created_at,owner_user_id,buyer_user_id,final_price,product_title,product_description,product_price_public,product_image_url"
+      )
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (ownedDealsErr) {
+      setErrorMsg(ownedDealsErr.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: buyerOffersData, error: buyerOffersErr } = await supabase
+      .from("offers")
+      .select("id,deal_id,buyer_user_id,proposed_price,created_at")
+      .eq("buyer_user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (buyerOffersErr) {
+      setErrorMsg(buyerOffersErr.message);
+      setLoading(false);
+      return;
+    }
+
+    const { data: wonDealsData, error: wonDealsErr } = await supabase
+      .from("deals")
+      .select(
+        "id,status,created_at,owner_user_id,buyer_user_id,final_price,product_title,product_description,product_price_public,product_image_url"
+      )
+      .eq("buyer_user_id", userId)
+      .eq("status", "closed")
+      .order("created_at", { ascending: false });
+
+    if (wonDealsErr) {
+      setErrorMsg(wonDealsErr.message);
+      setLoading(false);
+      return;
+    }
+
+    setOwnedDeals((ownedDealsData ?? []) as DealRow[]);
+    setBuyerOffers((buyerOffersData ?? []) as OfferRow[]);
+    setWonDeals((wonDealsData ?? []) as DealRow[]);
+    setLoading(false);
+  }
 
   useEffect(() => {
     let mounted = true;
 
-    (async () => {
-      setLoading(true);
-      setErrMsg(null);
-
-      const { data: auth, error: authError } = await supabase.auth.getUser();
-
-      if (authError) {
-        if (!mounted) return;
-        setErrMsg(authError.message);
-        setLoading(false);
-        return;
-      }
-
-      if (!auth?.user) {
-        router.push("/login");
-        return;
-      }
-
-      const { data: dealsData, error: dealsErr } = await supabase
-        .from("deals")
-        .select(
-          "id,status,created_at,product_title,product_price_public,product_image_url,product_description,owner_user_id"
-        )
-        .eq("owner_user_id", auth.user.id)
-        .order("created_at", { ascending: false });
-
+    async function init() {
       if (!mounted) return;
+      setLoading(true);
+      await loadData();
+    }
 
-      if (dealsErr) {
-        setErrMsg(dealsErr.message);
-        setDeals([]);
-        setLoading(false);
-        return;
-      }
+    init();
 
-      const dealRows = (dealsData ?? []) as DealRow[];
-      setDeals(dealRows);
-
-      const dealIds = dealRows.map((d) => d.id);
-
-      if (dealIds.length > 0) {
-        const { data: offersData } = await supabase
-          .from("offers")
-          .select("id,deal_id,proposed_price,created_at")
-          .in("deal_id", dealIds);
-
-        const { data: messagesData } = await supabase
-          .from("messages")
-          .select("id,deal_id,sender_role,content,created_at")
-          .in("deal_id", dealIds);
-
-        if (!mounted) return;
-
-        setOffers((offersData ?? []) as OfferRow[]);
-        setMessages((messagesData ?? []) as MessageRow[]);
-      } else {
-        setOffers([]);
-        setMessages([]);
-      }
-
-      setLoading(false);
-    })();
+    const channel = supabase
+      .channel("dashboard")
+      .on("postgres_changes", { event: "*", schema: "public", table: "deals" }, loadData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "offers" }, loadData)
+      .subscribe();
 
     return () => {
       mounted = false;
+      supabase.removeChannel(channel);
     };
-  }, [router]);
+  }, []);
 
-  async function logout() {
-    await supabase.auth.signOut();
-    router.push("/login");
-  }
+  const stats = useMemo(() => {
+    const published = ownedDeals.length;
+    const active = ownedDeals.filter((d) => d.status === "active").length;
+    const negotiating = ownedDeals.filter((d) => d.status === "negotiating").length;
+    const sold = ownedDeals.filter((d) => d.status === "closed").length;
 
-  const offerStatsByDeal = useMemo(() => {
-    const stats = new Map<
-      string,
-      {
-        count: number;
-        bestOffer: number | null;
-      }
-    >();
+    const revenue = ownedDeals
+      .filter((d) => d.status === "closed")
+      .reduce((acc, d) => acc + Number(d.final_price ?? 0), 0);
 
-    for (const o of offers) {
-      const current = stats.get(o.deal_id) ?? {
-        count: 0,
-        bestOffer: null,
-      };
+    const offersMade = buyerOffers.length;
+    const wins = wonDeals.length;
 
-      current.count += 1;
+    const spent = wonDeals.reduce(
+      (acc, d) => acc + Number(d.final_price ?? 0),
+      0
+    );
 
-      if (
-        typeof o.proposed_price === "number" &&
-        (current.bestOffer === null || o.proposed_price > current.bestOffer)
-      ) {
-        current.bestOffer = o.proposed_price;
-      }
-
-      stats.set(o.deal_id, current);
-    }
-
-    return stats;
-  }, [offers]);
-
-  const finalPriceByDeal = useMemo(() => {
-    const finals = new Map<string, number>();
-
-    for (const m of messages) {
-      const content = m.content ?? "";
-
-      if (
-        content.includes("Trato cerrado en $") ||
-        content.includes("aceptó la contraoferta de $")
-      ) {
-        const match = content.match(/\$(\d[\d.]*)/);
-        if (!match) continue;
-
-        const normalized = match[1].replace(/\./g, "");
-        const parsed = Number(normalized);
-
-        if (Number.isFinite(parsed)) {
-          finals.set(m.deal_id, parsed);
-        }
-      }
-    }
-
-    return finals;
-  }, [messages]);
-
-  const metrics = useMemo(() => {
-    const total = deals.length;
-    const active = deals.filter((d) => d.status === "active").length;
-    const negotiating = deals.filter((d) => d.status === "negotiating").length;
-    const closed = deals.filter((d) => d.status === "closed").length;
-
-    let revenue = 0;
-    for (const d of deals) {
-      if (d.status === "closed") {
-        revenue += finalPriceByDeal.get(d.id) ?? 0;
-      }
-    }
+    const ticketPromedio = sold > 0 ? revenue / sold : 0;
 
     return {
-      total,
+      published,
       active,
       negotiating,
-      closed,
+      sold,
       revenue,
+      offersMade,
+      wins,
+      spent,
+      ticketPromedio,
     };
-  }, [deals, finalPriceByDeal]);
+  }, [ownedDeals, buyerOffers, wonDeals]);
 
-  const salesChartData = useMemo(() => {
-    const data: Record<string, number> = {};
+  const revenueByMonth = useMemo(() => {
+    const soldDeals = ownedDeals.filter((d) => d.status === "closed");
+    return buildMonthlySeriesFromDeals(soldDeals);
+  }, [ownedDeals]);
 
-    for (const m of messages) {
-      const content = m.content ?? "";
+  const offersByMonth = useMemo(() => {
+    return buildMonthlySeriesFromOffers(buyerOffers);
+  }, [buyerOffers]);
 
-      if (
-        content.includes("Trato cerrado en $") ||
-        content.includes("aceptó la contraoferta de $")
-      ) {
-        const date = new Date(m.created_at ?? "").toLocaleDateString("es-CL");
-        const match = content.match(/\$(\d[\d.]*)/);
+  const topProductsByRevenue = useMemo(() => {
+    return buildTopProductsByRevenue(ownedDeals);
+  }, [ownedDeals]);
 
-        if (match) {
-          const value = Number(match[1].replace(/\./g, ""));
-          data[date] = (data[date] ?? 0) + value;
-        }
-      }
-    }
+  const productPerformance = useMemo(() => {
+    return ownedDeals
+      .filter((d) => d.status === "closed")
+      .map((d) => {
+        const publicPrice = Number(d.product_price_public ?? 0);
+        const finalPrice = Number(d.final_price ?? 0);
+        const diff = finalPrice - publicPrice;
+        const pct = publicPrice > 0 ? (diff / publicPrice) * 100 : 0;
 
-    return Object.entries(data).map(([date, value]) => ({
-      date,
-      value,
-    }));
-  }, [messages]);
-
-  const statusChartData = [
-    { name: "Disponibles", value: metrics.active },
-    { name: "Negociando", value: metrics.negotiating },
-    { name: "Vendidos", value: metrics.closed },
-  ];
-
-  const priceComparisonData = useMemo(() => {
-    return deals.slice(0, 8).map((d, index) => {
-      const stats = offerStatsByDeal.get(d.id) ?? {
-        count: 0,
-        bestOffer: null,
-      };
-
-      return {
-        name: d.product_title
-          ? d.product_title.length > 18
-            ? d.product_title.slice(0, 18) + "..."
-            : d.product_title
-          : `Deal ${index + 1}`,
-        published: Number(d.product_price_public ?? 0),
-        bestOffer: Number(stats.bestOffer ?? 0),
-      };
-    });
-  }, [deals, offerStatsByDeal]);
+        return {
+          id: d.id,
+          title: d.product_title ?? "Sin título",
+          status: d.status,
+          publicPrice,
+          finalPrice,
+          diff,
+          pct,
+          createdAt: d.created_at,
+        };
+      })
+      .sort((a, b) => b.finalPrice - a.finalPrice);
+  }, [ownedDeals]);
 
   if (loading) return <main className="container">Cargando…</main>;
+
+  if (errorMsg) {
+    return (
+      <main className="container">
+        <div className="header">
+          <div>
+            <h1 className="h1">Dashboard</h1>
+            <div className="sub">{errorMsg}</div>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="container">
       <div className="header">
         <div>
           <h1 className="h1">Dashboard</h1>
-          <div className="sub">Tus publicaciones</div>
+          <div className="sub">Resumen de tu actividad</div>
         </div>
 
         <div className="btnRow">
-          <Link className="btnGhost" href="/create">
-            Crear
-          </Link>
-          <Link className="btnGhost" href="/shop">
-            Tienda
-          </Link>
-          <button className="btnGhost" onClick={logout}>
-            Salir
-          </button>
+          <Link className="btnGhost" href="/shop">Tienda</Link>
+          <Link className="btnGhost" href="/my-products">Mis productos</Link>
+          <Link className="btnGhost" href="/my-offers">Mis ofertas</Link>
+          <Link className="btn" href="/create">Publicar</Link>
         </div>
       </div>
-
-      {errMsg && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: 12,
-            borderRadius: 12,
-            border: "1px solid rgba(255,80,80,.35)",
-            background: "rgba(255,80,80,.08)",
-          }}
-        >
-          {errMsg}
-        </div>
-      )}
 
       <div
         style={{
           marginTop: 16,
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          gap: 12,
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: 16,
         }}
       >
-        <div className="card">
-          <div className="small" style={{ opacity: 0.75 }}>
-            Total publicaciones
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 900, marginTop: 6 }}>
-            {metrics.total}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="small" style={{ opacity: 0.75 }}>
-            Disponibles
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 900, marginTop: 6 }}>
-            {metrics.active}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="small" style={{ opacity: 0.75 }}>
-            En negociación
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 900, marginTop: 6 }}>
-            {metrics.negotiating}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="small" style={{ opacity: 0.75 }}>
-            Vendidas
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 900, marginTop: 6 }}>
-            {metrics.closed}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="small" style={{ opacity: 0.75 }}>
-            Ingreso total cerrado
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 900, marginTop: 6 }}>
-            {money(metrics.revenue)}
-          </div>
-        </div>
+        {statCard("Publicados", stats.published)}
+        {statCard("Disponibles", stats.active)}
+        {statCard("Negociando", stats.negotiating)}
+        {statCard("Vendidos", stats.sold, `Ingresos: ${money(stats.revenue)}`)}
+        {statCard("Ofertas hechas", stats.offersMade)}
+        {statCard("Compras ganadas", stats.wins, `Gastado: ${money(stats.spent)}`)}
+        {statCard("Ticket promedio", money(stats.ticketPromedio))}
       </div>
 
       <DashboardCharts
-        sales={salesChartData}
-        statusStats={statusChartData}
-        priceComparison={priceComparisonData}
+        published={stats.published}
+        active={stats.active}
+        negotiating={stats.negotiating}
+        sold={stats.sold}
+        offersMade={stats.offersMade}
+        wins={stats.wins}
+        revenueByMonth={revenueByMonth}
+        offersByMonth={offersByMonth}
+        topProductsByRevenue={topProductsByRevenue}
       />
 
-      {deals.length === 0 ? (
-        <div className="card" style={{ marginTop: 12 }}>
-          <div className="muted">Aún no tienes publicaciones.</div>
+      <SalesAdvisor
+        deals={ownedDeals}
+        ticketPromedio={stats.ticketPromedio}
+      />
+
+      <div
+        style={{
+          marginTop: 16,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 16,
+        }}
+      >
+        <div className="card">
+          <h3>Tus productos</h3>
+          {ownedDeals.slice(0, 5).length === 0 ? (
+            <div className="muted">Aún no tienes publicaciones.</div>
+          ) : (
+            ownedDeals.slice(0, 5).map((d) => (
+              <div key={d.id} style={{ marginTop: 8 }}>
+                {d.product_title} · {d.status}
+              </div>
+            ))
+          )}
         </div>
-      ) : (
-        <div
-          style={{
-            marginTop: 16,
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
-            gap: 16,
-          }}
-        >
-          {deals.map((d) => {
-            const stats = offerStatsByDeal.get(d.id) ?? {
-              count: 0,
-              bestOffer: null,
-            };
 
-            const finalPrice = finalPriceByDeal.get(d.id) ?? null;
-            const statusBadge = getStatusBadge(d.status);
+        <div className="card">
+          <h3>Tus compras</h3>
+          {wonDeals.slice(0, 5).length === 0 ? (
+            <div className="muted">Aún no tienes compras cerradas.</div>
+          ) : (
+            wonDeals.slice(0, 5).map((d) => (
+              <div key={d.id} style={{ marginTop: 8 }}>
+                {d.product_title} · {money(d.final_price)}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
 
-            return (
-              <Link
-                key={d.id}
-                href={`/deal/${d.id}`}
-                className="card"
-                style={{
-                  textDecoration: "none",
-                  color: "inherit",
-                  display: "block",
-                }}
-              >
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {d.product_image_url ? (
-                    <img
-                      src={d.product_image_url}
-                      alt={d.product_title ?? "producto"}
-                      style={{
-                        width: "100%",
-                        height: 220,
-                        objectFit: "cover",
-                        borderRadius: 16,
-                      }}
-                    />
-                  ) : (
-                    <div
-                      style={{
-                        width: "100%",
-                        height: 220,
-                        borderRadius: 16,
-                        background: "rgba(255,255,255,.06)",
-                      }}
-                    />
-                  )}
+      <div className="card" style={{ marginTop: 16 }}>
+        <div style={{ fontWeight: 900, fontSize: 18, marginBottom: 12 }}>
+          Rendimiento por producto
+        </div>
 
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: 12,
-                      alignItems: "start",
-                    }}
+        {productPerformance.length === 0 ? (
+          <div className="muted">Aún no tienes ventas cerradas para analizar.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ textAlign: "left", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
+                  <th style={{ padding: "10px 8px" }}>Producto</th>
+                  <th style={{ padding: "10px 8px" }}>Publicado</th>
+                  <th style={{ padding: "10px 8px" }}>Final</th>
+                  <th style={{ padding: "10px 8px" }}>Diferencia</th>
+                  <th style={{ padding: "10px 8px" }}>%</th>
+                  <th style={{ padding: "10px 8px" }}>Fecha</th>
+                </tr>
+              </thead>
+              <tbody>
+                {productPerformance.map((row) => (
+                  <tr
+                    key={row.id}
+                    style={{ borderBottom: "1px solid rgba(255,255,255,.05)" }}
                   >
-                    <div style={{ fontWeight: 800, fontSize: 18, lineHeight: 1.2 }}>
-                      {d.product_title ?? "(sin título)"}
-                    </div>
-
-                    <div
+                    <td style={{ padding: "10px 8px", fontWeight: 700 }}>{row.title}</td>
+                    <td style={{ padding: "10px 8px" }}>{money(row.publicPrice)}</td>
+                    <td style={{ padding: "10px 8px" }}>{money(row.finalPrice)}</td>
+                    <td
                       style={{
-                        padding: "7px 10px",
-                        borderRadius: 999,
-                        background: statusBadge.bg,
-                        fontWeight: 700,
-                        fontSize: 13,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {statusBadge.label}
-                    </div>
-                  </div>
-
-                  <div style={{ fontSize: 24, fontWeight: 900 }}>
-                    {money(d.product_price_public)}
-                  </div>
-
-                  {d.status === "closed" && finalPrice !== null ? (
-                    <div
-                      style={{
-                        padding: 12,
-                        borderRadius: 14,
-                        background: "rgba(34,197,94,.10)",
-                      }}
-                    >
-                      <div className="small" style={{ opacity: 0.8, marginBottom: 4 }}>
-                        Precio final de venta
-                      </div>
-                      <div style={{ fontWeight: 900, fontSize: 20 }}>
-                        {money(finalPrice)}
-                      </div>
-                    </div>
-                  ) : stats.bestOffer !== null ? (
-                    <div
-                      style={{
-                        padding: 12,
-                        borderRadius: 14,
-                        background: "rgba(59,130,246,.10)",
-                      }}
-                    >
-                      <div className="small" style={{ opacity: 0.8, marginBottom: 4 }}>
-                        Mejor oferta actual
-                      </div>
-                      <div style={{ fontWeight: 900, fontSize: 20 }}>
-                        {money(stats.bestOffer)}
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        padding: 12,
-                        borderRadius: 14,
-                        background: "rgba(255,255,255,.05)",
-                      }}
-                    >
-                      <div className="small" style={{ opacity: 0.8 }}>
-                        Aún no hay ofertas
-                      </div>
-                    </div>
-                  )}
-
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginTop: 4,
-                    }}
-                  >
-                    <div className="small" style={{ opacity: 0.75 }}>
-                      {new Date(d.created_at).toLocaleDateString("es-CL")}
-                    </div>
-
-                    <div
-                      style={{
-                        padding: "8px 12px",
-                        borderRadius: 12,
-                        background: "rgba(255,255,255,.08)",
+                        padding: "10px 8px",
+                        color: row.diff >= 0 ? "#22c55e" : "#f87171",
                         fontWeight: 700,
                       }}
                     >
-                      Ver deal
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      )}
+                      {row.diff >= 0 ? "+" : ""}{money(row.diff)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "10px 8px",
+                        color: row.pct >= 0 ? "#22c55e" : "#f87171",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {row.pct >= 0 ? "+" : ""}
+                      {row.pct.toFixed(1)}%
+                    </td>
+                    <td style={{ padding: "10px 8px" }}>
+                      {new Date(row.createdAt).toLocaleDateString("es-CL")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </main>
   );
 }
