@@ -182,8 +182,8 @@ export async function POST(req: Request) {
         rationale: "Oferta enviada por comprador",
         buyer_status: "submitted",
         seller_status: "pending",
-        buyer_decision: null,
-        seller_decision: null,
+        buyer_decision: "pending",
+        seller_decision: "pending",
       } as any)
       .select("id,deal_id,proposed_price,created_at")
       .maybeSingle();
