@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: app/my-products/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -23,13 +30,15 @@ type OfferRow = {
   created_at: string | null;
 };
 
-type StatusFilter = "all" | "active" | "negotiating" | "closed";
+type StatusFilter = "all" | "active" | "negotiating" | "closed" | "archived";
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function money(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
+// Función auxiliar: getStatusBadge.
 function getStatusBadge(status: string) {
   if (status === "closed") {
     return {
@@ -47,6 +56,14 @@ function getStatusBadge(status: string) {
     };
   }
 
+  if (status === "archived") {
+    return {
+      label: "🗂️ Archivado",
+      bg: "rgba(148,163,184,.16)",
+      border: "1px solid rgba(148,163,184,.30)",
+    };
+  }
+
   return {
     label: "🟢 Disponible",
     bg: "rgba(59,130,246,.16)",
@@ -54,11 +71,14 @@ function getStatusBadge(status: string) {
   };
 }
 
+// Página/Componente exportado: MyProductsPage.
 export default function MyProductsPage() {
   const router = useRouter();
 
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+// Estado local de React para datos de UI y formularios.
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
@@ -66,6 +86,7 @@ export default function MyProductsPage() {
   const [offers, setOffers] = useState<OfferRow[]>([]);
 
   async function loadData() {
+    // Carga los productos del usuario y las ofertas asociadas.
     setErrorMsg(null);
 
     const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -122,10 +143,12 @@ export default function MyProductsPage() {
     setLoading(false);
   }
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     let mounted = true;
 
     async function init() {
+      // Inicializa la página y establece un canal en tiempo real.
       if (!mounted) return;
       setLoading(true);
       await loadData();
@@ -158,6 +181,7 @@ export default function MyProductsPage() {
   }, []);
 
   const offerStatsByDeal = useMemo(() => {
+    // Genera métricas de oferta por producto para mostrar demanda y mejor oferta.
     const map = new Map<
       string,
       {
@@ -188,6 +212,7 @@ export default function MyProductsPage() {
   }, [offers]);
 
   const filteredItems = useMemo(() => {
+    // Aplicar filtro de búsqueda y filtro por estado en los productos del vendedor.
     const q = query.trim().toLowerCase();
 
     return items.filter((item) => {
@@ -230,7 +255,7 @@ export default function MyProductsPage() {
         <div>
           <h1 className="h1">Mis productos</h1>
           <div className="sub">
-            Gestiona tus publicaciones y entra al panel del vendedor.
+            Gestiona tus publicaciones, revisa ofertas y administra el estado de cada producto.
           </div>
         </div>
 
@@ -302,6 +327,13 @@ export default function MyProductsPage() {
           >
             Vendidos
           </button>
+
+          <button
+            className={statusFilter === "archived" ? "btn" : "btnGhost"}
+            onClick={() => setStatusFilter("archived")}
+          >
+            Archivados
+          </button>
         </div>
       </div>
 
@@ -334,11 +366,14 @@ export default function MyProductsPage() {
                   border:
                     item.status === "negotiating"
                       ? "1px solid rgba(234,179,8,.22)"
+                      : item.status === "archived"
+                      ? "1px solid rgba(148,163,184,.22)"
                       : undefined,
                   boxShadow:
                     item.status === "negotiating"
                       ? "0 0 22px rgba(234,179,8,.06)"
                       : undefined,
+                  opacity: item.status === "archived" ? 0.88 : 1,
                 }}
               >
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -435,6 +470,8 @@ export default function MyProductsPage() {
                       display: "flex",
                       justifyContent: "space-between",
                       alignItems: "center",
+                      gap: 8,
+                      flexWrap: "wrap",
                       marginTop: 6,
                     }}
                   >
@@ -442,9 +479,18 @@ export default function MyProductsPage() {
                       {new Date(item.created_at).toLocaleDateString("es-CL")}
                     </div>
 
-                    <Link className="btnGhost" href={`/deal/${item.id}`}>
-                      Ver deal
-                    </Link>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <Link className="btnGhost" href={`/deal/${item.id}`}>
+                        Ver deal
+                      </Link>
+
+                      <Link
+                        className="btnGhost"
+                        href={`/my-products/${item.id}/edit`}
+                      >
+                        {item.status === "archived" ? "Reactivar" : "Editar"}
+                      </Link>
+                    </div>
                   </div>
                 </div>
               </div>

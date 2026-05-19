@@ -1,5 +1,11 @@
+/*
+ * File: app/page.tsx
+ * Purpose: Página de la aplicación Next.js
+ */
+
 import Link from "next/link";
 
+// Página/Componente exportado: HomePage.
 export default function HomePage() {
   return (
     <main className="container">

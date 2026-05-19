@@ -1,6 +1,12 @@
+/*
+ * File: app/api/update-product-description/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Función auxiliar: assertEnv.
 function assertEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -16,6 +22,7 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
 
+    // Validación y normalización de los datos entrantes.
     const dealId = body.dealId?.trim();
     const description = body.description?.trim();
 
@@ -57,6 +64,7 @@ export async function POST(req: Request) {
       );
     }
 
+    // Actualizar el texto descriptivo del producto en el trato.
     const { error: updateErr } = await admin
       .from("deals")
       .update({

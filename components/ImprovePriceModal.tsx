@@ -1,5 +1,13 @@
 "use client";
 
+/*
+ * File: components/ImprovePriceModal.tsx
+ * Purpose: Componente de UI reutilizable
+
+
+ */
+
+
 import { useState } from "react";
 
 type ImprovePriceModalProps = {
@@ -13,11 +21,13 @@ type ImprovePriceModalProps = {
   action?: "subir_precio" | "bajar_precio" | "mantener_estrategia" | null;
 };
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function money(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
+// Página/Componente exportado: ImprovePriceModal.
 export default function ImprovePriceModal({
   open,
   onClose,
@@ -28,17 +38,21 @@ export default function ImprovePriceModal({
   finalPrice,
   action,
 }: ImprovePriceModalProps) {
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(false);
+// Estado local de React para datos de UI y formularios.
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [suggestedPrice, setSuggestedPrice] = useState<number | null>(null);
+// Estado local de React para datos de UI y formularios.
   const [reason, setReason] = useState("");
   const [tips, setTips] = useState<string[]>([]);
 
   if (!open) return null;
 
   async function generateSuggestion() {
+    // Llama al endpoint de IA para obtener un precio sugerido basado en el producto.
     setLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -75,6 +89,7 @@ export default function ImprovePriceModal({
   }
 
   async function applySuggestedPrice() {
+    // Aplica el precio sugerido al deal usando el endpoint de actualización de precio.
     if (!suggestedPrice || !dealId) {
       setErrorMsg("Primero genera un precio sugerido.");
       return;

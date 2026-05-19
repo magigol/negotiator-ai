@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: components/SalesAdvisor.tsx
+ * Purpose: Componente de UI reutilizable
+
+ */
+
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import ImproveDescriptionModal from "@/components/ImproveDescriptionModal";
@@ -40,10 +47,12 @@ type SalesAdvisorProps = {
   ticketPromedio: number;
 };
 
+// Página/Componente exportado: SalesAdvisor.
 export default function SalesAdvisor({
   deals,
   ticketPromedio,
 }: SalesAdvisorProps) {
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<AdviceItem[]>([]);
   const [actions, setActions] = useState<ActionItem[]>([]);
@@ -72,10 +81,12 @@ export default function SalesAdvisor({
     return null;
   }, [actions, selectedPriceDeal]);
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     let cancelled = false;
 
     async function loadAdvice() {
+      // Llama al endpoint de IA para obtener recomendaciones y acciones de ventas.
       if (!deals.length) {
         setSummary([
           {
@@ -141,7 +152,9 @@ export default function SalesAdvisor({
     };
   }, [deals, ticketPromedio]);
 
+// Función auxiliar: getSummaryStyles.
   function getSummaryStyles(tone: AdviceItem["tone"]) {
+    // Estilos visuales según el tono de la recomendación.
     if (tone === "good") {
       return {
         bg: "rgba(34,197,94,.10)",
@@ -162,7 +175,9 @@ export default function SalesAdvisor({
     };
   }
 
+// Función auxiliar: getPriorityStyles.
   function getPriorityStyles(priority: ActionItem["priority"]) {
+    // Estilos visuales según la prioridad de la acción recomendada.
     if (priority === "alta") {
       return {
         bg: "rgba(239,68,68,.12)",
@@ -183,6 +198,7 @@ export default function SalesAdvisor({
     };
   }
 
+// Función auxiliar: actionLabel.
   function actionLabel(action: ActionItem["action"]) {
     switch (action) {
       case "subir_precio":

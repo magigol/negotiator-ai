@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: app/dashboard/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -38,11 +45,13 @@ type ProductPoint = {
   value: number;
 };
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function money(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function statCard(title: string, value: string | number, sub?: string) {
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -53,6 +62,7 @@ function statCard(title: string, value: string | number, sub?: string) {
   );
 }
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function buildLastSixMonthsLabels() {
   const now = new Date();
   const formatter = new Intl.DateTimeFormat("es-CL", {
@@ -68,6 +78,7 @@ function buildLastSixMonthsLabels() {
   return labels;
 }
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function buildMonthlySeriesFromDeals(deals: DealRow[]): MonthlyPoint[] {
   const labels = buildLastSixMonthsLabels();
   const formatter = new Intl.DateTimeFormat("es-CL", {
@@ -96,6 +107,7 @@ function buildMonthlySeriesFromDeals(deals: DealRow[]): MonthlyPoint[] {
   }));
 }
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function buildMonthlySeriesFromOffers(offers: OfferRow[]): MonthlyPoint[] {
   const labels = buildLastSixMonthsLabels();
   const formatter = new Intl.DateTimeFormat("es-CL", {
@@ -123,6 +135,7 @@ function buildMonthlySeriesFromOffers(offers: OfferRow[]): MonthlyPoint[] {
   }));
 }
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function buildTopProductsByRevenue(deals: DealRow[]): ProductPoint[] {
   return deals
     .filter((d) => d.status === "closed" && Number(d.final_price ?? 0) > 0)
@@ -137,9 +150,11 @@ function buildTopProductsByRevenue(deals: DealRow[]): ProductPoint[] {
     .slice(0, 5);
 }
 
+// Página/Componente exportado: DashboardPage.
 export default function DashboardPage() {
   const router = useRouter();
 
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -148,6 +163,7 @@ export default function DashboardPage() {
   const [wonDeals, setWonDeals] = useState<DealRow[]>([]);
 
   async function loadData() {
+    // Carga la información del usuario y los datos clave para el dashboard.
     setErrorMsg(null);
 
     const { data: auth } = await supabase.auth.getUser();
@@ -206,10 +222,12 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     let mounted = true;
 
     async function init() {
+      // Efecto de inicialización y suscripción a cambios en tiempo real.
       if (!mounted) return;
       setLoading(true);
       await loadData();
@@ -230,6 +248,7 @@ export default function DashboardPage() {
   }, []);
 
   const stats = useMemo(() => {
+    // Resume los principales contadores del dashboard a partir de los deals del usuario.
     const published = ownedDeals.length;
     const active = ownedDeals.filter((d) => d.status === "active").length;
     const negotiating = ownedDeals.filter((d) => d.status === "negotiating").length;

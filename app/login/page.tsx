@@ -1,29 +1,44 @@
 "use client";
 
+/*
+ * File: app/login/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Mode = "login" | "register";
 
+// Función auxiliar: LoginContent.
 function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [mode, setMode] = useState<Mode>("login");
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
+// Estado local de React para datos de UI y formularios.
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+// Estado local de React para datos de UI y formularios.
   const [email, setEmail] = useState("");
+// Estado local de React para datos de UI y formularios.
   const [password, setPassword] = useState("");
+// Estado local de React para datos de UI y formularios.
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const nextPath = searchParams.get("next") || "/dashboard";
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     (async () => {
+      // Si ya hay sesión activa, redirige al siguiente destino.
       const { data } = await supabase.auth.getUser();
       if (data?.user) {
         router.push(nextPath);
@@ -34,6 +49,7 @@ function LoginContent() {
   }, [router, nextPath]);
 
   const canSubmit = useMemo(() => {
+    // Controla si el formulario cumple los requisitos mínimos para enviar.
     if (!email.trim()) return false;
     if (!password.trim()) return false;
 
@@ -49,6 +65,8 @@ function LoginContent() {
     e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
+
+    // Envía formulario de inicio de sesión o registro según el modo seleccionado.
 
     if (!canSubmit) {
       setErrorMsg(
@@ -242,6 +260,7 @@ function LoginContent() {
   );
 }
 
+// Página/Componente exportado: LoginPage.
 export default function LoginPage() {
   return (
     <Suspense fallback={<main className="container">Cargando…</main>}>

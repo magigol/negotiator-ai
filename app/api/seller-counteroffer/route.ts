@@ -1,6 +1,12 @@
+/*
+ * File: app/api/seller-counteroffer/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Función auxiliar: assertEnv.
 function assertEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -41,6 +47,8 @@ export async function POST(req: Request) {
       .maybeSingle();
 
     if (dealErr) throw dealErr;
+
+    // Confirmar que el trato existe y que aún no está cerrado.
 
     if (!deal) {
       return NextResponse.json({ error: "Deal not found" }, { status: 404 });

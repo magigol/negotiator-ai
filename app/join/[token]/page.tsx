@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: app/join/[token]/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -30,11 +37,14 @@ type TermsRow = {
   updated_at: string | null;
 };
 
+// Página/Componente exportado: JoinBuyerPage.
 export default function JoinBuyerPage({ params }: { params: { token: string } }) {
   const router = useRouter();
   const token = params.token;
 
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
+// Estado local de React para datos de UI y formularios.
   const [saving, setSaving] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
@@ -52,10 +62,13 @@ export default function JoinBuyerPage({ params }: { params: { token: string } })
     []
   );
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     (async () => {
       setErrMsg(null);
       setLoading(true);
+
+      // Paso 1: validar token y rol, luego cargar datos de deal y términos del comprador.
 
       // 1) validar token en deal_participants
       const { data: part, error: partErr } = await supabase
@@ -127,6 +140,8 @@ export default function JoinBuyerPage({ params }: { params: { token: string } })
 
     setErrMsg(null);
     setSaving(true);
+
+    // Guarda los términos del comprador y actualiza el estado del deal para notificar al vendedor.
 
     // validaciones mínimas
     if (!buyerMax || buyerMax <= 0) {

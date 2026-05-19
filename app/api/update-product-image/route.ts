@@ -1,5 +1,5 @@
 /*
- * File: app/api/update-product-price/route.ts
+ * File: app/api/update-product-image/route.ts
  * Purpose: Archivo de código personalizado
  */
 
@@ -15,26 +15,23 @@ function assertEnv(name: string) {
 
 type Body = {
   dealId?: string;
-  publicPrice?: number;
+  imageUrl?: string;
 };
 
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
 
-    // Normalizar entrada y validar datos recibidos en el cuerpo de la petición.
+    // Normalizamos la entrada y validamos los valores esperados.
     const dealId = body.dealId?.trim();
-    const publicPrice = Number(body.publicPrice ?? 0);
+    const imageUrl = body.imageUrl?.trim();
 
     if (!dealId) {
       return NextResponse.json({ error: "dealId is required" }, { status: 400 });
     }
 
-    if (!Number.isFinite(publicPrice) || publicPrice <= 0) {
-      return NextResponse.json(
-        { error: "publicPrice must be a positive number" },
-        { status: 400 }
-      );
+    if (!imageUrl) {
+      return NextResponse.json({ error: "imageUrl is required" }, { status: 400 });
     }
 
     const supabaseUrl = assertEnv("NEXT_PUBLIC_SUPABASE_URL");
@@ -56,11 +53,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Deal not found" }, { status: 404 });
     }
 
-    // Actualizar el precio público del producto en el trato existente.
+    // Actualizar la URL de la imagen del producto en el registro del trato.
     const { error: updateErr } = await admin
       .from("deals")
       .update({
-        product_price_public: publicPrice,
+        product_image_url: imageUrl,
       })
       .eq("id", dealId);
 
@@ -69,7 +66,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       dealId,
-      publicPrice,
+      imageUrl,
     });
   } catch (e: any) {
     console.error(e);

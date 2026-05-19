@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: app/admin/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -32,6 +39,7 @@ type OfferRow = {
   created_at: string;
 };
 
+// Función auxiliar: dayKey.
 function dayKey(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -39,12 +47,14 @@ function dayKey(d: Date) {
   return `${y}-${m}-${dd}`;
 }
 
+// Función auxiliar: minutesBetween.
 function minutesBetween(aIso: string, bIso: string) {
   const a = new Date(aIso).getTime();
   const b = new Date(bIso).getTime();
   return Math.max(0, Math.round((b - a) / 60000));
 }
 
+// Función auxiliar: isEmailAdmin.
 function isEmailAdmin(email: string | null | undefined) {
   const allow = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? "")
     .split(",")
@@ -55,14 +65,17 @@ function isEmailAdmin(email: string | null | undefined) {
   return allow.includes(email.toLowerCase());
 }
 
+// Página/Componente exportado: AdminPage.
 export default function AdminPage() {
   const router = useRouter();
 
   const [deals, setDeals] = useState<DealRow[]>([]);
   const [firstOffers, setFirstOffers] = useState<Map<string, OfferRow>>(new Map());
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     (async () => {
       try {
@@ -114,6 +127,7 @@ export default function AdminPage() {
   }, [router]);
 
   const stats = useMemo(() => {
+    // Resume métricas principales a partir de los deals cargados.
     const total = deals.length;
     const count = (s: string) => deals.filter((d) => d.status === s).length;
 
@@ -138,6 +152,7 @@ export default function AdminPage() {
   }, [deals, firstOffers]);
 
   const barData = useMemo(() => {
+    // Datos para el gráfico de barras que muestra el funnel de estatus.
     const labels = ["active", "pending_seller", "accepted", "rejected"];
     const values = [
       deals.filter((d) => d.status === "active").length,
@@ -161,6 +176,7 @@ export default function AdminPage() {
   }, [deals]);
 
   const lineData = useMemo(() => {
+    // Serie de tiempo para mostrar deals creados en los últimos 14 días.
     const today = new Date();
     const days = 14;
 

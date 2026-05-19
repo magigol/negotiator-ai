@@ -1,16 +1,32 @@
+/*
+ * File: app/api/propose/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+/**
+ * Obtiene una variable de entorno y falla si no existe.
+ */
+// Función auxiliar: assertEnv.
 function assertEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
 }
 
+/**
+ * Limita un valor a un rango inferior y superior.
+ */
+// Función auxiliar: clamp.
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+/**
+ * Ejecuta la llamada a la API de OpenAI y devuelve la respuesta de texto.
+ */
 async function callOpenAI({
   apiKey,
   input,
@@ -49,6 +65,7 @@ async function callOpenAI({
 }
 
 export async function POST(req: Request) {
+  // Endpoint POST que maneja una propuesta de compra desde la tienda.
   try {
     const body = await req.json().catch(() => ({}));
 

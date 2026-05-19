@@ -1,21 +1,35 @@
+/*
+ * File: app/api/offers/respond/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+/**
+ * Valida variables de entorno y arroja un error claro si falta alguna.
+ * Este helper se usa en este endpoint para construir el cliente Supabase.
+ */
 function mustEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Falta variable de entorno: ${name}`);
   return v;
 }
 
+/**
+ * Cliente Supabase de servidor con rol de servicio para operaciones administrativas.
+ */
 const supabaseAdmin = createClient(
   mustEnv("NEXT_PUBLIC_SUPABASE_URL"),
   mustEnv("SUPABASE_SERVICE_ROLE_KEY")
 );
 
 export async function POST(req: Request) {
+  // Ruta para procesar la respuesta del comprador o vendedor a una oferta.
   try {
     const { dealId, offerId, actorRole, action } = await req.json();
 
+    // Validación básica de campos requeridos.
     if (!dealId || !offerId || !actorRole || !action) {
       return NextResponse.json({ error: "Faltan campos" }, { status: 400 });
     }
@@ -59,6 +73,9 @@ export async function POST(req: Request) {
 
     const buyerStatus = updated?.buyer_status;
     const sellerStatus = updated?.seller_status;
+
+    // Revisar el estado combinado de comprador y vendedor para determinar
+    // si el trato debe cerrarse, rechazarse o permanecer activo.
 
     // publicar mensaje de estado
     await supabaseAdmin.from("messages").insert({

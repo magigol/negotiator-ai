@@ -1,5 +1,11 @@
+/*
+ * File: app/api/sales-advisor/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 
+// Función auxiliar: assertEnv.
 function assertEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -80,6 +86,7 @@ Reglas:
       deals: reducedDeals,
     });
 
+    // Enviamos los datos al modelo de OpenAI para obtener recomendaciones comerciales.
     const res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {

@@ -1,5 +1,14 @@
+/*
+ * File: app/api/improve-price/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 
+/**
+ * Valida que exista una variable de entorno requerida.
+ */
+// Función auxiliar: assertEnv.
 function assertEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -15,6 +24,7 @@ type Body = {
 };
 
 export async function POST(req: Request) {
+  // Ruta que sugiere un precio objetivo usando OpenAI.
   try {
     const openaiKey = assertEnv("OPENAI_API_KEY");
     const body = (await req.json()) as Body;

@@ -1,3 +1,10 @@
+/*
+ * File: lib/requireAuth.ts
+ * Purpose: Utilidad de librería / helper
+ *
+ * Comentarios añadidos para ayudar a otro desarrollador a entender el flujo de datos y la lógica.
+ */
+
 import { supabase } from "@/lib/supabaseClient";
 
 export async function requireAuthOrRedirect(

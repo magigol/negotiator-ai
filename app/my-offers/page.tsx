@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: app/my-offers/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -41,15 +48,17 @@ type MessageRow = {
 
 type StatusFilter = "all" | "active" | "negotiating" | "closed";
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function money(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
+// Función auxiliar: getStatusBadge.
 function getStatusBadge(status: string) {
   if (status === "closed") {
     return {
-      label: "✅ Vendido",
+      label: "✅ Cerrado",
       bg: "rgba(34,197,94,.18)",
       border: "1px solid rgba(34,197,94,.28)",
     };
@@ -70,23 +79,16 @@ function getStatusBadge(status: string) {
   };
 }
 
+// Función auxiliar: getBuyerOutcome.
 function getBuyerOutcome(params: {
   deal: DealRow | null;
-  offerIdsCount: number;
   bestBuyerOffer: number | null;
-  maxOfferOverall: number | null;
   authUserId: string;
   anyAcceptedOfferForUser: boolean;
   anyRejectedOfferForUser: boolean;
 }) {
-  const {
-    deal,
-    bestBuyerOffer,
-    maxOfferOverall,
-    authUserId,
-    anyAcceptedOfferForUser,
-    anyRejectedOfferForUser,
-  } = params;
+  const { deal, bestBuyerOffer, authUserId, anyAcceptedOfferForUser, anyRejectedOfferForUser } =
+    params;
 
   if (!deal) {
     return {
@@ -128,30 +130,29 @@ function getBuyerOutcome(params: {
     };
   }
 
-  if (
-    bestBuyerOffer !== null &&
-    maxOfferOverall !== null &&
-    bestBuyerOffer >= maxOfferOverall
-  ) {
+  if (bestBuyerOffer !== null) {
     return {
-      label: "🥇 Vas liderando",
-      bg: "rgba(59,130,246,.12)",
-      border: "1px solid rgba(59,130,246,.24)",
+      label: "⏳ Esperando respuesta",
+      bg: "rgba(234,179,8,.12)",
+      border: "1px solid rgba(234,179,8,.24)",
     };
   }
 
   return {
-    label: "⏳ Esperando respuesta",
-    bg: "rgba(234,179,8,.12)",
-    border: "1px solid rgba(234,179,8,.24)",
+    label: "Sin actividad",
+    bg: "rgba(255,255,255,.08)",
+    border: "1px solid rgba(255,255,255,.12)",
   };
 }
 
+// Página/Componente exportado: MyOffersPage.
 export default function MyOffersPage() {
   const router = useRouter();
 
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+// Estado local de React para datos de UI y formularios.
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [authUserId, setAuthUserId] = useState<string>("");
@@ -161,6 +162,7 @@ export default function MyOffersPage() {
   const [messages, setMessages] = useState<MessageRow[]>([]);
 
   async function loadData() {
+    // Carga las ofertas del comprador y toda la información de deal relacionada.
     setErrorMsg(null);
 
     const { data: auth, error: authErr } = await supabase.auth.getUser();
@@ -235,6 +237,7 @@ export default function MyOffersPage() {
     setLoading(false);
   }
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     let mounted = true;
 
@@ -328,13 +331,13 @@ export default function MyOffersPage() {
   }, [messages]);
 
   const groupedOffers = useMemo(() => {
+    // Agrupa las ofertas de un comprador por deal para mostrar estado de negociación.
     const map = new Map<
       string,
       {
         deal: DealRow | null;
         offers: OfferRow[];
         bestBuyerOffer: number | null;
-        maxOfferOverall: number | null;
         latestOfferDate: string | null;
         latestCounterOffer:
           | {
@@ -352,7 +355,6 @@ export default function MyOffersPage() {
         deal,
         offers: [],
         bestBuyerOffer: null,
-        maxOfferOverall: null,
         latestOfferDate: null,
         latestCounterOffer: latestCounterByDeal.get(offer.deal_id) ?? null,
       };
@@ -373,14 +375,6 @@ export default function MyOffersPage() {
       map.set(offer.deal_id, current);
     }
 
-    for (const entry of map.values()) {
-      entry.maxOfferOverall = entry.offers.reduce<number | null>((acc, o) => {
-        if (typeof o.proposed_price !== "number") return acc;
-        if (acc === null || o.proposed_price > acc) return o.proposed_price;
-        return acc;
-      }, null);
-    }
-
     return Array.from(map.entries()).map(([dealId, value]) => ({
       dealId,
       ...value,
@@ -388,6 +382,7 @@ export default function MyOffersPage() {
   }, [offers, dealById, latestCounterByDeal]);
 
   const filteredItems = useMemo(() => {
+    // Filtra los deals de ofertas por búsqueda y estado.
     const q = query.trim().toLowerCase();
 
     return groupedOffers.filter((item) => {
@@ -430,7 +425,7 @@ export default function MyOffersPage() {
         <div>
           <h1 className="h1">Mis ofertas</h1>
           <div className="sub">
-            Revisa los productos por los que has ofertado y el estado de cada negociación.
+            Revisa el estado de tus negociaciones como comprador.
           </div>
         </div>
 
@@ -533,18 +528,37 @@ export default function MyOffersPage() {
             const anyRejectedOfferForUser = item.offers.some(
               (o) =>
                 o.seller_decision === "rejected" ||
-                o.seller_status === "rejected"
+                o.seller_status === "rejected" ||
+                o.buyer_status === "rejected"
             );
 
             const buyerOutcome = getBuyerOutcome({
               deal,
-              offerIdsCount: item.offers.length,
               bestBuyerOffer: item.bestBuyerOffer,
-              maxOfferOverall: item.maxOfferOverall,
               authUserId,
               anyAcceptedOfferForUser,
               anyRejectedOfferForUser,
             });
+
+            const latestOwnOffer = [...item.offers].sort((a, b) => {
+              const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+              const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+              return tb - ta;
+            })[0];
+
+            const ownDecisionLabel =
+              latestOwnOffer?.seller_decision === "accepted"
+                ? "✅ Tu última oferta fue aceptada"
+                : latestOwnOffer?.seller_decision === "rejected"
+                ? "❌ Tu última oferta fue rechazada"
+                : "⏳ Tu última oferta sigue pendiente";
+
+            const ownDecisionBg =
+              latestOwnOffer?.seller_decision === "accepted"
+                ? "rgba(34,197,94,.14)"
+                : latestOwnOffer?.seller_decision === "rejected"
+                ? "rgba(239,68,68,.14)"
+                : "rgba(234,179,8,.14)";
 
             return (
               <div
@@ -649,6 +663,20 @@ export default function MyOffersPage() {
                   >
                     {buyerOutcome.label}
                   </div>
+
+                  {latestOwnOffer ? (
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 14,
+                        background: ownDecisionBg,
+                        fontWeight: 700,
+                        fontSize: 14,
+                      }}
+                    >
+                      {ownDecisionLabel}
+                    </div>
+                  ) : null}
 
                   {deal?.status === "closed" ? (
                     <div

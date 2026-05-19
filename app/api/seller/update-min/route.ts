@@ -1,6 +1,19 @@
+/*
+ * File: app/api/seller/update-min/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Función auxiliar: assertEnv.
+function assertEnv(name: string) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
+
+// Función auxiliar: mustEnv.
 function mustEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Falta variable de entorno: ${name}`);
@@ -16,6 +29,7 @@ export async function POST(req: Request) {
   try {
     const { dealId, newMin } = await req.json();
 
+    // Verificar que el cuerpo de la petición incluya el ID del trato y el nuevo mínimo.
     if (!dealId || newMin === undefined || newMin === null) {
       return NextResponse.json({ error: "Faltan campos" }, { status: 400 });
     }

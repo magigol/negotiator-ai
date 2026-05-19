@@ -1,22 +1,34 @@
 "use client";
 
+/*
+ * File: app/create/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 type Urgency = "low" | "medium" | "high";
 
+// Página/Componente exportado: CreateDealPage.
 export default function CreateDealPage() {
   const router = useRouter();
 
   const STORAGE_BUCKET =
     process.env.NEXT_PUBLIC_SUPABASE_BUCKET ?? "product-images";
 
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
+// Estado local de React para datos de UI y formularios.
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+// Estado local de React para datos de UI y formularios.
   const [title, setTitle] = useState("");
+// Estado local de React para datos de UI y formularios.
   const [description, setDescription] = useState("");
   const [pricePublic, setPricePublic] = useState<number>(0);
   const [file, setFile] = useState<File | null>(null);
@@ -26,8 +38,10 @@ export default function CreateDealPage() {
   const [sellerMin, setSellerMin] = useState<number>(0);
   const [sellerUrgency, setSellerUrgency] = useState<Urgency>("medium");
 
+// Estado local de React para datos de UI y formularios.
   const [createSellerToken, setCreateSellerToken] = useState(true);
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     (async () => {
       const { data: auth } = await supabase.auth.getUser();
@@ -39,6 +53,7 @@ export default function CreateDealPage() {
     })();
   }, [router]);
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -46,6 +61,7 @@ export default function CreateDealPage() {
   }, [previewUrl]);
 
   const canSubmit = useMemo(() => {
+    // Habilita el botón solo cuando todos los datos mínimos son válidos.
     if (!title.trim()) return false;
     if (pricePublic <= 0) return false;
     if (sellerInitial <= 0) return false;
@@ -55,6 +71,7 @@ export default function CreateDealPage() {
     return true;
   }, [title, pricePublic, sellerInitial, sellerMin, file]);
 
+// Función auxiliar: resetForm.
   function resetForm() {
     setTitle("");
     setDescription("");
@@ -69,6 +86,7 @@ export default function CreateDealPage() {
   }
 
   async function uploadImageOrThrow(userId: string, dealId: string, f: File) {
+    // Sube la imagen al bucket de Supabase y retorna la URL pública.
     const ext = f.name.split(".").pop() || "jpg";
     const path = `${userId}/${dealId}.${ext}`;
 
@@ -98,6 +116,7 @@ export default function CreateDealPage() {
     e.preventDefault();
     setErrorMsg(null);
 
+    // Validación previa al envío: asegurarse de que el formulario está completo.
     if (!canSubmit) {
       setErrorMsg(
         "Revisa el formulario: título, precio público, términos del vendedor (mínimo <= inicial) e imagen."

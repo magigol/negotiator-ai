@@ -1,3 +1,8 @@
+/*
+ * File: lib/supabaseClient.ts
+ * Purpose: Utilidad de librería / helper
+ */
+
 import { createClient } from "@supabase/supabase-js";
 
 export const supabase = createClient(

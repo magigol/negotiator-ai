@@ -1,5 +1,5 @@
 /*
- * File: app/api/update-product-price/route.ts
+ * File: app/api/reject-offer/route.ts
  * Purpose: Archivo de código personalizado
  */
 
@@ -15,26 +15,23 @@ function assertEnv(name: string) {
 
 type Body = {
   dealId?: string;
-  publicPrice?: number;
+  offerId?: string;
 };
 
 export async function POST(req: Request) {
+  // Ruta para marcar una oferta como rechazada por el vendedor.
   try {
     const body = (await req.json()) as Body;
 
-    // Normalizar entrada y validar datos recibidos en el cuerpo de la petición.
     const dealId = body.dealId?.trim();
-    const publicPrice = Number(body.publicPrice ?? 0);
+    const offerId = body.offerId?.trim();
 
     if (!dealId) {
       return NextResponse.json({ error: "dealId is required" }, { status: 400 });
     }
 
-    if (!Number.isFinite(publicPrice) || publicPrice <= 0) {
-      return NextResponse.json(
-        { error: "publicPrice must be a positive number" },
-        { status: 400 }
-      );
+    if (!offerId) {
+      return NextResponse.json({ error: "offerId is required" }, { status: 400 });
     }
 
     const supabaseUrl = assertEnv("NEXT_PUBLIC_SUPABASE_URL");
@@ -44,32 +41,46 @@ export async function POST(req: Request) {
       auth: { persistSession: false },
     });
 
-    const { data: deal, error: dealErr } = await admin
-      .from("deals")
-      .select("id")
-      .eq("id", dealId)
+    const { data: offer, error: offerErr } = await admin
+      .from("offers")
+      .select("id, deal_id, proposed_price, buyer_user_id")
+      .eq("id", offerId)
+      .eq("deal_id", dealId)
       .maybeSingle();
 
-    if (dealErr) throw dealErr;
+    if (offerErr) throw offerErr;
 
-    if (!deal) {
-      return NextResponse.json({ error: "Deal not found" }, { status: 404 });
+    if (!offer) {
+      return NextResponse.json({ error: "Offer not found" }, { status: 404 });
     }
 
-    // Actualizar el precio público del producto en el trato existente.
+    // Marcar esta oferta específica como rechazada por el vendedor.
     const { error: updateErr } = await admin
-      .from("deals")
+      .from("offers")
       .update({
-        product_price_public: publicPrice,
-      })
-      .eq("id", dealId);
+        seller_decision: "rejected",
+        seller_status: "rejected",
+        buyer_status: "rejected",
+      } as any)
+      .eq("id", offerId);
 
     if (updateErr) throw updateErr;
+
+    await admin.from("messages").insert([
+      {
+        deal_id: dealId,
+        sender_role: "seller",
+        sender_user_id: null,
+        content: `El vendedor rechazó la oferta de $${Number(
+          offer.proposed_price ?? 0
+        ).toLocaleString("es-CL")}.`,
+      } as any,
+    ]);
 
     return NextResponse.json({
       ok: true,
       dealId,
-      publicPrice,
+      offerId,
     });
   } catch (e: any) {
     console.error(e);

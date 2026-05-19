@@ -1,3 +1,8 @@
+/*
+ * File: lib/supabaseServer.ts
+ * Purpose: Utilidad de librería / helper
+ */
+
 import "server-only";
 import { createClient } from "@supabase/supabase-js";
 

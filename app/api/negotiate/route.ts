@@ -1,5 +1,17 @@
+/*
+ * File: app/api/negotiate/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+
+// Función auxiliar: assertEnv.
+function assertEnv(name: string) {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
+  return v;
+}
 
 type NegotiateReq = {
   dealId?: string;
@@ -10,16 +22,18 @@ type NegotiateReq = {
   buyer_user_id?: string;
 };
 
-function assertEnv(name: string) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env var: ${name}`);
-  return v;
-}
-
+/**
+ * Restringe un número a un intervalo [lo, hi].
+ */
+// Función auxiliar: clamp.
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+/**
+ * Llama a OpenAI y devuelve el texto generado.
+ * También convierte cualquier respuesta mal formada en un error.
+ */
 async function callOpenAI({
   apiKey,
   model,
@@ -65,6 +79,7 @@ async function callOpenAI({
 }
 
 export async function POST(req: Request) {
+  // Endpoint POST para procesar una oferta del comprador y generar una contraoferta.
   try {
     const body = (await req.json().catch(() => ({}))) as NegotiateReq;
 

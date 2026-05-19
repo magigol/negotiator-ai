@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: components/ImproveDescriptionModal.tsx
+ * Purpose: Componente de UI reutilizable
+
+ */
+
+
 import { useState } from "react";
 
 type ImproveDescriptionModalProps = {
@@ -11,6 +18,7 @@ type ImproveDescriptionModalProps = {
   publicPrice?: number | null;
 };
 
+// Página/Componente exportado: ImproveDescriptionModal.
 export default function ImproveDescriptionModal({
   open,
   onClose,
@@ -19,7 +27,9 @@ export default function ImproveDescriptionModal({
   description,
   publicPrice,
 }: ImproveDescriptionModalProps) {
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(false);
+// Estado local de React para datos de UI y formularios.
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -29,6 +39,7 @@ export default function ImproveDescriptionModal({
   if (!open) return null;
 
   async function generateImprovement() {
+    // Llama al endpoint de IA para generar una descripción mejorada.
     setLoading(true);
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -62,6 +73,7 @@ export default function ImproveDescriptionModal({
   }
 
   async function copyToClipboard() {
+    // Copia la descripción generada al portapapeles del navegador.
     try {
       await navigator.clipboard.writeText(improvedDescription);
       setSuccessMsg("Texto copiado.");
@@ -72,6 +84,7 @@ export default function ImproveDescriptionModal({
   }
 
   async function saveInProduct() {
+    // Actualiza la descripción del producto con el contenido generado por IA.
     if (!improvedDescription.trim()) {
       setErrorMsg("Primero genera una descripción mejorada.");
       return;

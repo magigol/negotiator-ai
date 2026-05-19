@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: app/deal/[id]/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter, useParams } from "next/navigation";
@@ -51,17 +58,20 @@ type Message = {
   created_at: string | null;
 };
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function money(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
+// Función auxiliar: isUuid.
 function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     v
   );
 }
 
+// Función auxiliar: getOfferRank.
 function getOfferRank(price: number | null, min: number | null) {
   if (!price || !min) return { label: "Sin evaluar", color: "#555" };
 
@@ -73,6 +83,7 @@ function getOfferRank(price: number | null, min: number | null) {
   return { label: "🔴 Baja", color: "#ef4444" };
 }
 
+// Función auxiliar: getCloseProbability.
 function getCloseProbability(
   price: number | null,
   min: number | null,
@@ -105,6 +116,7 @@ function getCloseProbability(
   return Math.max(0, Math.min(95, score));
 }
 
+// Función auxiliar: getAIRecommendation.
 function getAIRecommendation(params: {
   bestOffer: number | null;
   sellerMinCurrent: number | null;
@@ -190,6 +202,7 @@ function getAIRecommendation(params: {
   };
 }
 
+// Función auxiliar: getAISuggestedCounteroffer.
 function getAISuggestedCounteroffer(params: {
   bestOffer: number | null;
   sellerMinCurrent: number | null;
@@ -260,6 +273,7 @@ function getAISuggestedCounteroffer(params: {
   };
 }
 
+// Página/Componente exportado: DealSellerPage.
 export default function DealSellerPage() {
   const router = useRouter();
   const params = useParams<{ id: string | string[] }>();
@@ -270,15 +284,19 @@ export default function DealSellerPage() {
   const [terms, setTerms] = useState<DealTerms | null>(null);
   const [offers, setOffers] = useState<Offer[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+// Estado local de React para datos de UI y formularios.
   const [showHistory, setShowHistory] = useState(false);
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [actingOfferId, setActingOfferId] = useState<string | null>(null);
+// Estado local de React para datos de UI y formularios.
   const [sendingCounteroffer, setSendingCounteroffer] = useState(false);
   const [acceptingOfferId, setAcceptingOfferId] = useState<string | null>(null);
 
   async function loadData() {
+    // Carga el deal, términos, ofertas y mensajes para el vendedor.
     setErrorMsg(null);
 
     if (!dealId || typeof dealId !== "string" || !isUuid(dealId)) {
@@ -345,10 +363,12 @@ export default function DealSellerPage() {
     setLoading(false);
   }
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     let mounted = true;
 
     async function init() {
+      // Inicializa la página y suscribe a cambios en la base de datos.
       if (!mounted) return;
       setLoading(true);
       await loadData();
@@ -384,6 +404,7 @@ export default function DealSellerPage() {
   }, [dealId]);
 
   const bestOffer = useMemo(() => {
+    // Calcula la mejor oferta recibida para mostrar métricas y recomendaciones.
     return [...offers]
       .filter((o) => typeof o.proposed_price === "number")
       .sort((a, b) => Number(b.proposed_price) - Number(a.proposed_price))[0];
@@ -468,35 +489,6 @@ export default function DealSellerPage() {
     return Number.isFinite(parsed) ? parsed : null;
   }, [closingMessage, deal]);
 
-  async function decideOffer(id: string, decision: "accept" | "reject") {
-    if (!dealId) return;
-
-    setActingOfferId(id);
-    setActionMsg(null);
-
-    try {
-      const { error } = await supabase
-        .from("offers")
-        .update({
-          seller_decision: decision,
-          seller_status: decision,
-        })
-        .eq("id", id);
-
-      if (error) throw error;
-
-      setActionMsg(
-        decision === "accept" ? "✅ Oferta actualizada." : "🟠 Oferta rechazada."
-      );
-
-      await loadData();
-    } catch (e: any) {
-      setActionMsg(`❌ ${e?.message ?? "No se pudo actualizar la oferta."}`);
-    } finally {
-      setActingOfferId(null);
-    }
-  }
-
   async function acceptOffer(offerId: string) {
     if (!deal) return;
 
@@ -527,6 +519,39 @@ export default function DealSellerPage() {
       setActionMsg(`❌ ${e?.message ?? "No se pudo aceptar la oferta."}`);
     } finally {
       setAcceptingOfferId(null);
+    }
+  }
+
+  async function rejectOffer(offerId: string) {
+    if (!deal) return;
+
+    setActingOfferId(offerId);
+    setActionMsg(null);
+
+    try {
+      const res = await fetch("/api/reject-offer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          dealId: deal.id,
+          offerId,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(json?.error ?? "No se pudo rechazar la oferta.");
+      }
+
+      setActionMsg("🟠 Oferta rechazada.");
+      await loadData();
+    } catch (e: any) {
+      setActionMsg(`❌ ${e?.message ?? "No se pudo rechazar la oferta."}`);
+    } finally {
+      setActingOfferId(null);
     }
   }
 
@@ -655,8 +680,7 @@ export default function DealSellerPage() {
           </div>
 
           <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
-            Comprador ganador:{" "}
-            <b>{deal.buyer_user_id ? deal.buyer_user_id : "—"}</b>
+            Comprador ganador: <b>{deal.buyer_user_id ?? "—"}</b>
           </div>
 
           {closingMessage?.content ? (
@@ -717,7 +741,7 @@ export default function DealSellerPage() {
         )}
       </div>
 
-      {bestOffer && (
+      {bestOffer ? (
         <div className="card" style={{ marginTop: 12 }}>
           <h3>Mejor oferta actual</h3>
           <div style={{ fontSize: 24, fontWeight: 800 }}>
@@ -733,7 +757,7 @@ export default function DealSellerPage() {
             Probabilidad estimada de cierre: <b>{closeProbability}%</b>
           </div>
         </div>
-      )}
+      ) : null}
 
       <div
         className="card"
@@ -748,7 +772,6 @@ export default function DealSellerPage() {
         </div>
 
         <div style={{ fontSize: 22, fontWeight: 900 }}>{aiRecommendation.action}</div>
-
         <div style={{ fontWeight: 800, marginTop: 6 }}>{aiRecommendation.title}</div>
 
         <div className="small" style={{ marginTop: 8, opacity: 0.92, lineHeight: 1.6 }}>
@@ -854,6 +877,20 @@ export default function DealSellerPage() {
                 daysPublished
               );
 
+              const decisionLabel =
+                o.seller_decision === "accepted"
+                  ? "✅ Aceptada"
+                  : o.seller_decision === "rejected"
+                  ? "❌ Rechazada"
+                  : "⏳ Pendiente";
+
+              const decisionBg =
+                o.seller_decision === "accepted"
+                  ? "rgba(34,197,94,.14)"
+                  : o.seller_decision === "rejected"
+                  ? "rgba(239,68,68,.14)"
+                  : "rgba(234,179,8,.14)";
+
               return (
                 <div key={o.id} className="card">
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
@@ -887,6 +924,20 @@ export default function DealSellerPage() {
                         Probabilidad cierre: {probability}%
                       </div>
 
+                      <div
+                        style={{
+                          marginTop: 10,
+                          display: "inline-block",
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          background: decisionBg,
+                          fontWeight: 700,
+                          fontSize: 13,
+                        }}
+                      >
+                        {decisionLabel}
+                      </div>
+
                       <div className="small" style={{ marginTop: 8, opacity: 0.7 }}>
                         Comprador: {o.buyer_user_id ?? "—"}
                       </div>
@@ -896,7 +947,7 @@ export default function DealSellerPage() {
                       </div>
                     </div>
 
-                    {!o.seller_decision && deal.status !== "closed" && (
+                    {!o.seller_decision && deal.status !== "closed" ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         <button
                           className="btn"
@@ -909,12 +960,12 @@ export default function DealSellerPage() {
                         <button
                           className="btnGhost"
                           disabled={actingOfferId === o.id || deal.status === "closed"}
-                          onClick={() => decideOffer(o.id, "reject")}
+                          onClick={() => rejectOffer(o.id)}
                         >
-                          Rechazar
+                          {actingOfferId === o.id ? "Rechazando…" : "Rechazar"}
                         </button>
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               );

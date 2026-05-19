@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: app/shop/[id]/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -30,17 +37,20 @@ type MessageRow = {
   created_at: string | null;
 };
 
+// Función auxiliar: isUuid.
 function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     v
   );
 }
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function money(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
+// Página/Componente exportado: ShopItemPage.
 export default function ShopItemPage() {
   const router = useRouter();
   const params = useParams<{ id: string | string[] }>();
@@ -48,6 +58,7 @@ export default function ShopItemPage() {
   const dealIdRaw = params?.id;
   const dealId = Array.isArray(dealIdRaw) ? dealIdRaw[0] : dealIdRaw;
 
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
   const [deal, setDeal] = useState<DealRow | null>(null);
   const [offers, setOffers] = useState<OfferRow[]>([]);
@@ -55,9 +66,12 @@ export default function ShopItemPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [offer, setOffer] = useState<string>("");
+// Estado local de React para datos de UI y formularios.
   const [sending, setSending] = useState(false);
+// Estado local de React para datos de UI y formularios.
   const [acceptingCounter, setAcceptingCounter] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+// Estado local de React para datos de UI y formularios.
   const [showOfferModal, setShowOfferModal] = useState(false);
 
   const offerNumber = useMemo(() => Number(offer), [offer]);
@@ -158,6 +172,7 @@ export default function ShopItemPage() {
   }, [deal]);
 
   async function reloadEverything(currentDealId: string) {
+    // Recarga el deal, ofertas y mensajes desde Supabase cuando cambian.
     const { data: updatedDeal } = await supabase
       .from("deals")
       .select(
@@ -187,10 +202,12 @@ export default function ShopItemPage() {
     setMessages((messagesData ?? []) as MessageRow[]);
   }
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     let mounted = true;
 
     async function init() {
+      // Carga inicial del producto y sus datos relacionados.
       setLoading(true);
       setErrorMsg(null);
 
@@ -270,6 +287,7 @@ export default function ShopItemPage() {
   }, [dealId]);
 
   async function proposePrice() {
+    // Envía una propuesta de precio desde el comprador al endpoint de negociación.
     if (!deal) return;
 
     if (deal.status === "closed") {
@@ -324,6 +342,7 @@ export default function ShopItemPage() {
   }
 
   async function acceptCounterOffer() {
+    // Acepta la última contraoferta generada por IA para este producto.
     if (!deal || !latestCounterOffer) return;
 
     setAcceptingCounter(true);

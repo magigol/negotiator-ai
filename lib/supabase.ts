@@ -1,3 +1,8 @@
+/*
+ * File: lib/supabase.ts
+ * Purpose: Utilidad de librería / helper
+ */
+
 import { createBrowserClient } from "@supabase/ssr";
 
 export const supabase = createBrowserClient(

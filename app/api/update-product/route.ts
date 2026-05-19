@@ -1,5 +1,5 @@
 /*
- * File: app/api/update-product-price/route.ts
+ * File: app/api/update-product/route.ts
  * Purpose: Archivo de código personalizado
  */
 
@@ -15,24 +15,35 @@ function assertEnv(name: string) {
 
 type Body = {
   dealId?: string;
-  publicPrice?: number;
+  product_title?: string;
+  product_description?: string | null;
+  product_price_public?: number | null;
 };
 
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body;
 
-    // Normalizar entrada y validar datos recibidos en el cuerpo de la petición.
+    // Normalizar y validar los campos de actualización del producto.
     const dealId = body.dealId?.trim();
-    const publicPrice = Number(body.publicPrice ?? 0);
+    const product_title = body.product_title?.trim();
+    const product_description = body.product_description?.trim() ?? "";
+    const product_price_public = Number(body.product_price_public ?? 0);
 
     if (!dealId) {
       return NextResponse.json({ error: "dealId is required" }, { status: 400 });
     }
 
-    if (!Number.isFinite(publicPrice) || publicPrice <= 0) {
+    if (!product_title) {
       return NextResponse.json(
-        { error: "publicPrice must be a positive number" },
+        { error: "product_title is required" },
+        { status: 400 }
+      );
+    }
+
+    if (!Number.isFinite(product_price_public) || product_price_public <= 0) {
+      return NextResponse.json(
+        { error: "product_price_public must be a positive number" },
         { status: 400 }
       );
     }
@@ -56,11 +67,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Deal not found" }, { status: 404 });
     }
 
-    // Actualizar el precio público del producto en el trato existente.
+    // Guardar los cambios de título, descripción y precio en el trato.
     const { error: updateErr } = await admin
       .from("deals")
       .update({
-        product_price_public: publicPrice,
+        product_title,
+        product_description,
+        product_price_public,
       })
       .eq("id", dealId);
 
@@ -69,7 +82,6 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       dealId,
-      publicPrice,
     });
   } catch (e: any) {
     console.error(e);

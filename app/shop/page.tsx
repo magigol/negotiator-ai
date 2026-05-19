@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: app/shop/page.tsx
+ * Purpose: Archivo de código personalizado
+
+ */
+
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
@@ -23,11 +30,13 @@ type OfferRow = {
 
 type StatusFilter = "all" | "active" | "negotiating" | "closed";
 
+// Helper de utilidad para transformaciones de datos y renderizado.
 function money(n: number | null | undefined) {
   if (n === null || n === undefined) return "—";
   return `$${Number(n).toLocaleString("es-CL")}`;
 }
 
+// Función auxiliar: getDemandBadge.
 function getDemandBadge(offerCount: number) {
   if (offerCount >= 3) {
     return {
@@ -49,6 +58,7 @@ function getDemandBadge(offerCount: number) {
   };
 }
 
+// Función auxiliar: getStatusBadge.
 function getStatusBadge(status: string) {
   if (status === "closed") {
     return {
@@ -82,15 +92,20 @@ function getStatusBadge(status: string) {
   };
 }
 
+// Página/Componente exportado: ShopPage.
 export default function ShopPage() {
   const [items, setItems] = useState<DealRow[]>([]);
   const [offers, setOffers] = useState<OfferRow[]>([]);
+// Estado local de React para datos de UI y formularios.
   const [loading, setLoading] = useState(true);
+// Estado local de React para datos de UI y formularios.
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     (async () => {
+      // Carga inicial de productos y ofertas para mostrar la tienda.
       setLoading(true);
 
       const { data: dealsData, error: dealsErr } = await supabase
@@ -121,6 +136,7 @@ export default function ShopPage() {
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
 
+    // Filtrar productos por búsqueda y por estado seleccionado.
     return items.filter((item) => {
       const title = item.product_title?.toLowerCase() ?? "";
       const desc = item.product_description?.toLowerCase() ?? "";
@@ -134,6 +150,7 @@ export default function ShopPage() {
   }, [items, query, statusFilter]);
 
   const offerStatsByDeal = useMemo(() => {
+    // Agrupa ofertas por deal para mostrar demanda y mejor oferta.
     const stats = new Map<
       string,
       {

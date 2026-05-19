@@ -1,22 +1,96 @@
 "use client";
 
+/*
+ * File: components/AppNavbar.tsx
+ * Purpose: Componente de UI reutilizable
+
+ */
+
+
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
+// Función auxiliar: isActive.
 function isActive(pathname: string, href: string) {
   if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+// Función auxiliar: NotificationsButton.
+function NotificationsButton() {
+// Estado local de React para datos de UI y formularios.
+  const [count, setCount] = useState(0);
+
+  async function load() {
+    // Carga el estado de notificaciones no leídas para el badge.
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth?.user?.id) {
+      setCount(0);
+      return;
+    }
+
+    const { count } = await supabase
+      .from("notifications")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", auth.user.id)
+      .is("read_at", null);
+
+    setCount(count ?? 0);
+  }
+
+// Efecto de React que se ejecuta cuando cambian las dependencias.
+  useEffect(() => {
+    // Mantiene el contador de notificaciones en tiempo real.
+    load();
+
+    const channel = supabase
+      .channel("notifications-badge")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "notifications" },
+        () => load()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  return (
+    <Link
+      href="/notifications"
+      style={{
+        padding: "10px 14px",
+        borderRadius: 12,
+        textDecoration: "none",
+        fontWeight: 700,
+        color: "inherit",
+        background: count > 0 ? "rgba(239,68,68,.16)" : "rgba(255,255,255,.04)",
+        border:
+          count > 0
+            ? "1px solid rgba(239,68,68,.28)"
+            : "1px solid rgba(255,255,255,.08)",
+      }}
+    >
+      🔔 {count > 0 ? `(${count})` : ""}
+    </Link>
+  );
+}
+
+// Página/Componente exportado: AppNavbar.
 export default function AppNavbar() {
   const pathname = usePathname();
   const router = useRouter();
 
+// Estado local de React para datos de UI y formularios.
   const [loadingAuth, setLoadingAuth] = useState(true);
+// Estado local de React para datos de UI y formularios.
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
+// Efecto de React que se ejecuta cuando cambian las dependencias.
   useEffect(() => {
     let mounted = true;
 
@@ -45,6 +119,7 @@ export default function AppNavbar() {
   }, []);
 
   async function logout() {
+    // Cierra sesión y lleva al usuario a la página de login.
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();
@@ -140,6 +215,8 @@ export default function AppNavbar() {
                 + Publicar
               </Link>
 
+              <NotificationsButton />
+
               <button className="btnGhost" onClick={logout}>
                 Salir
               </button>
@@ -170,4 +247,4 @@ export default function AppNavbar() {
       </div>
     </div>
   );
-} 
+}

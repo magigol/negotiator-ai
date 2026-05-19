@@ -1,6 +1,15 @@
+/*
+ * File: app/api/accept-counteroffer/route.ts
+ * Purpose: Archivo de código personalizado
+ */
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+/**
+ * Helper para asegurar que las variables de entorno necesarias estén presentes.
+ * Usa esta misma función en varias rutas API para validar configuración.
+ */
 function assertEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -8,7 +17,9 @@ function assertEnv(name: string) {
 }
 
 export async function POST(req: Request) {
+  // Endpoint POST que procesa la aceptación de una contraoferta por parte del comprador.
   try {
+    // Parse del cuerpo JSON de la petición.
     const body = await req.json().catch(() => ({}));
 
     const dealId: string | undefined = body.dealId ?? body.deal_id;

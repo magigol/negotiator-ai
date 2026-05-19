@@ -1,5 +1,12 @@
 "use client";
 
+/*
+ * File: components/DashboardCharts.tsx
+ * Purpose: Componente de UI reutilizable
+
+ */
+
+
 import {
   ResponsiveContainer,
   BarChart,
@@ -37,6 +44,7 @@ type DashboardChartsProps = {
   topProductsByRevenue: ProductPoint[];
 };
 
+// Página/Componente exportado: DashboardCharts.
 export default function DashboardCharts({
   published,
   active,
@@ -66,6 +74,7 @@ export default function DashboardCharts({
     { name: "Vendidos", value: sold },
   ];
 
+  // Chequeos simples para determinar si hay datos suficientes para cada gráfico.
   const hasPublicationData = publicationData.some((d) => d.value > 0);
   const hasActivityData = activityData.some((d) => d.value > 0);
   const hasPieData = pieData.some((d) => d.value > 0);

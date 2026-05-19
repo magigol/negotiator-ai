@@ -1,5 +1,5 @@
 /*
- * File: app/api/update-product-price/route.ts
+ * File: app/api/reactivate-product/route.ts
  * Purpose: Archivo de código personalizado
  */
 
@@ -15,24 +15,18 @@ function assertEnv(name: string) {
 
 type Body = {
   dealId?: string;
-  publicPrice?: number;
 };
 
 export async function POST(req: Request) {
+  // Ruta para reactivar un producto que fue archivado y aún no está cerrado.
   try {
     const body = (await req.json()) as Body;
-
-    // Normalizar entrada y validar datos recibidos en el cuerpo de la petición.
     const dealId = body.dealId?.trim();
-    const publicPrice = Number(body.publicPrice ?? 0);
 
+    // Normaliza la entrada y asegura que se reciba el ID del trato.
     if (!dealId) {
-      return NextResponse.json({ error: "dealId is required" }, { status: 400 });
-    }
-
-    if (!Number.isFinite(publicPrice) || publicPrice <= 0) {
       return NextResponse.json(
-        { error: "publicPrice must be a positive number" },
+        { error: "dealId is required" },
         { status: 400 }
       );
     }
@@ -46,30 +40,45 @@ export async function POST(req: Request) {
 
     const { data: deal, error: dealErr } = await admin
       .from("deals")
-      .select("id")
+      .select("id,status")
       .eq("id", dealId)
       .maybeSingle();
 
     if (dealErr) throw dealErr;
 
     if (!deal) {
-      return NextResponse.json({ error: "Deal not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Deal not found" },
+        { status: 404 }
+      );
     }
 
-    // Actualizar el precio público del producto en el trato existente.
+    if (deal.status === "closed") {
+      return NextResponse.json(
+        { error: "No puedes reactivar un producto cerrado." },
+        { status: 400 }
+      );
+    }
+
     const { error: updateErr } = await admin
       .from("deals")
       .update({
-        product_price_public: publicPrice,
+        status: "active",
       })
       .eq("id", dealId);
 
     if (updateErr) throw updateErr;
 
+    await admin.from("messages").insert({
+      deal_id: dealId,
+      sender_role: "system",
+      content: "Producto reactivado por el vendedor.",
+    } as any);
+
     return NextResponse.json({
       ok: true,
       dealId,
-      publicPrice,
+      status: "active",
     });
   } catch (e: any) {
     console.error(e);
